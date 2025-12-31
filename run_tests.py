@@ -16,7 +16,12 @@ EXPECTED_FAIL = {
 
 def run_test(file_path):
     result = subprocess.run(
-        ["python3", "phoenix/cli.py", str(file_path)],
+        [
+            sys.executable,
+            "-m",
+            "phoenix.cli",
+            str(file_path),
+        ],
         capture_output=True,
         text=True,
     )
