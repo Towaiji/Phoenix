@@ -29,6 +29,31 @@ def check_types(tree):
 
     for node in ast.walk(tree):
 
+        # -------- Rule 4: static loop bounds --------
+        if isinstance(node, ast.While):
+            raise Exception(
+                "While-loops are forbidden. Loop bounds must be statically known."
+            )
+
+        if isinstance(node, ast.For):
+            # Only allow: for i in range(...)
+            if not isinstance(node.iter, ast.Call):
+                raise Exception(
+                    "For-loop iterable must be a statically known range()."
+                )
+
+            if not isinstance(node.iter.func, ast.Name) or node.iter.func.id != "range":
+                raise Exception(
+                    "For-loops must use range() with static bounds."
+                )
+
+            # All range(...) arguments must be integer literals
+            for arg in node.iter.args:
+                if not isinstance(arg, ast.Constant) or not isinstance(arg.value, int):
+                    raise Exception(
+                        "range() bounds must be integer literals."
+                    )
+
         # -------- Rule 3: ban dynamic execution/imports --------
         if isinstance(node, ast.Call):
             # eval(...), exec(...), __import__(...)
