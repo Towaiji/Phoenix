@@ -48,6 +48,7 @@ class TypeInferencer(ast.NodeVisitor):
         self.function_param_hints: Dict[str, List[Type]] = {}
         self.in_if: bool = False
         self.conditional_depth: int = 0
+        self.branch_assignments: Dict[str, ast.AST] = {}
 
     def infer(self, tree: ast.AST) -> TypeContext:
         function_defs = [stmt for stmt in tree.body if isinstance(stmt, ast.FunctionDef)]
@@ -147,6 +148,22 @@ class TypeInferencer(ast.NodeVisitor):
         cond_type = self.infer_expr(node.test)
         if not isinstance(cond_type, BoolType):
             self.error("if condition must be a bool", node.test)
+
+        body_assigned, body_first = self._collect_assignments(node.body)
+        else_assigned, else_first = self._collect_assignments(node.orelse)
+
+        if not node.orelse and body_assigned:
+            first_var = next(iter(body_assigned))
+            self.error(f"Variable '{first_var}' assigned only in one branch", body_first[first_var])
+
+        missing_in_else = body_assigned - else_assigned
+        missing_in_body = else_assigned - body_assigned
+        if missing_in_else:
+            var = next(iter(missing_in_else))
+            self.error(f"Variable '{var}' assigned only in one branch", body_first[var])
+        if missing_in_body:
+            var = next(iter(missing_in_body))
+            self.error(f"Variable '{var}' assigned only in one branch", else_first[var])
 
         self.in_if = True
         self.conditional_depth += 1
@@ -307,6 +324,20 @@ class TypeInferencer(ast.NodeVisitor):
             self._unify_types(old, new) for old, new in zip(current, arg_types)
         ]
         self.function_param_hints[func_name] = merged
+
+    def _collect_assignments(self, stmts: List[ast.stmt]) -> (set, Dict[str, ast.AST]):
+        assigned: set = set()
+        first: Dict[str, ast.AST] = {}
+
+        for stmt in stmts:
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Assign):
+                    target = node.targets[0]
+                    if isinstance(target, ast.Name):
+                        name = target.id
+                        assigned.add(name)
+                        first.setdefault(name, node)
+        return assigned, first
 
 
 def infer_types(tree: ast.AST, filename: str, lines: List[str]) -> TypeContext:
