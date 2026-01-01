@@ -12,6 +12,7 @@ EXPECTED_FAIL = {
     "bad_import.py",
     "bad_while.py",
     "bad_for_dynamic.py",
+    "bad_big.py"
 }
 
 def run_test(file_path):
