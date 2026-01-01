@@ -28,11 +28,11 @@ class CEmitter:
 
     def emit_assign(self, node):
         target = node.targets[0]
+        value = node.value
 
-        # x = <expr>
+        # x = ...
         if isinstance(target, ast.Name):
             name = target.id
-            value = node.value
 
             # int literal
             if isinstance(value, ast.Constant) and isinstance(value.value, int):
@@ -46,12 +46,25 @@ class CEmitter:
                 init = ", ".join(elems)
                 self.emit(f"int {name}[{size}] = {{{init}}};")
 
-            # binary op: x = a + b
-            elif isinstance(value, ast.BinOp):
-                left = self.expr(value.left)
-                right = self.expr(value.right)
-                self.emit(f"{name} = {left} + {right};")
+            # x = array[i]
+            elif isinstance(value, ast.Subscript):
+                rhs = self.expr(value)
+                self.emit(f"int {name} = {rhs};")
                 self.last_int_var = name
+
+            # x = expr (BinOp)
+            elif isinstance(value, ast.BinOp):
+                expr = self.expr(value)
+                self.emit(f"{name} = {expr};")
+                self.last_int_var = name
+
+        # array[i] = expr
+        elif isinstance(target, ast.Subscript):
+            lhs = self.expr(target)
+            rhs = self.expr(value)
+            self.emit(f"{lhs} = {rhs};")
+
+
 
     def emit_for(self, node):
         # for i in range(N)
@@ -75,7 +88,25 @@ class CEmitter:
             idx = self.expr(node.slice)
             return f"{arr}[{idx}]"
 
+        if isinstance(node, ast.BinOp):
+            left = self.expr(node.left)
+            right = self.expr(node.right)
+
+            if isinstance(node.op, ast.Add):
+                op = "+"
+            elif isinstance(node.op, ast.Sub):
+                op = "-"
+            elif isinstance(node.op, ast.Mult):
+                op = "*"
+            elif isinstance(node.op, ast.Div):
+                op = "/"
+            else:
+                op = "+"
+
+            return f"{left} {op} {right}"
+
         return "0"
+
 
 
 def transpile(tree):
