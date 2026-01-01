@@ -44,10 +44,26 @@ class TypeInferencer(ast.NodeVisitor):
         self.env_stack: List[Dict[str, Type]] = [self.ctx.globals]
         self.current_function: Optional[str] = None
         self.return_types: List[Type] = []
+        self.function_defs: Dict[str, ast.FunctionDef] = {}
+        self.function_param_hints: Dict[str, List[Type]] = {}
 
     def infer(self, tree: ast.AST) -> TypeContext:
+        function_defs = [stmt for stmt in tree.body if isinstance(stmt, ast.FunctionDef)]
+
+        # Register function stubs so calls can record argument types even before analysis.
+        for func in function_defs:
+            param_types: List[Type] = [UnknownType() for _ in func.args.args]
+            self.ctx.functions[func.name] = FunctionType(tuple(param_types), UnknownType())
+            self.function_defs[func.name] = func
+
+        # First pass: globals and calls (skip function bodies).
         for stmt in tree.body:
-            self.visit(stmt)
+            if not isinstance(stmt, ast.FunctionDef):
+                self.visit(stmt)
+
+        # Second pass: analyze functions with any recorded parameter hints.
+        for func in function_defs:
+            self.visit(func)
         return self.ctx
 
     # ---- helpers -------------------------------------------------
@@ -73,12 +89,18 @@ class TypeInferencer(ast.NodeVisitor):
 
     # ---- visitors ------------------------------------------------
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        param_types: List[Type] = [UnknownType() for _ in node.args.args]
+        hinted_params = self.function_param_hints.get(
+            node.name, [UnknownType() for _ in node.args.args]
+        )
+        # Pad/truncate in case of mismatch; zip below handles differing lengths safely.
+        param_types: List[Type] = list(hinted_params[: len(node.args.args)])
+        if len(param_types) < len(node.args.args):
+            param_types.extend([UnknownType()] * (len(node.args.args) - len(param_types)))
         func_type = FunctionType(tuple(param_types), UnknownType())
         self.ctx.functions[node.name] = func_type
 
         # new scope for function body
-        self.env_stack.append({arg.arg: UnknownType() for arg in node.args.args})
+        self.env_stack.append({arg.arg: t for arg, t in zip(node.args.args, param_types)})
         self.current_function = node.name
         self.return_types = []
 
@@ -139,14 +161,10 @@ class TypeInferencer(ast.NodeVisitor):
                 return self.annotate(expr, ListType(UnknownType(), length=0))
 
             elem_types = [self.infer_expr(e) for e in expr.elts]
-            first_type = elem_types[0]
+            element_type = elem_types[0]
             for t in elem_types[1:]:
-                if t != first_type:
-                    self.error(
-                        "List elements must share a single static type",
-                        expr,
-                    )
-            return self.annotate(expr, ListType(first_type, length=len(expr.elts)))
+                element_type = self._unify_types(element_type, t)
+            return self.annotate(expr, ListType(element_type, length=len(expr.elts)))
 
         if isinstance(expr, ast.Subscript):
             value_type = self.infer_expr(expr.value)
@@ -173,6 +191,8 @@ class TypeInferencer(ast.NodeVisitor):
         return self.annotate(expr, UnknownType())
 
     def _infer_call(self, expr: ast.Call) -> Type:
+        arg_types = [self.infer_expr(a) for a in expr.args]
+
         # int(x)
         if isinstance(expr.func, ast.Name) and expr.func.id == "int":
             return self.annotate(expr, IntType())
@@ -193,6 +213,7 @@ class TypeInferencer(ast.NodeVisitor):
 
         if isinstance(expr.func, ast.Name):
             func_name = expr.func.id
+            self._record_function_call(func_name, arg_types)
             func_type = self.ctx.functions.get(func_name, None)
             if func_type:
                 return self.annotate(expr, func_type.return_type)
@@ -206,6 +227,36 @@ class TypeInferencer(ast.NodeVisitor):
             if t != first:
                 self.error("Function returns must be type-stable", node)
         return first
+
+    def _unify_types(self, existing: Type, new: Type) -> Type:
+        if isinstance(existing, UnknownType):
+            return new
+        if isinstance(new, UnknownType):
+            return existing
+        if existing == new:
+            return existing
+        if (isinstance(existing, IntType) and isinstance(new, FloatType)) or (
+            isinstance(existing, FloatType) and isinstance(new, IntType)
+        ):
+            return FloatType()
+        if isinstance(existing, ListType) and isinstance(new, ListType):
+            element = self._unify_types(existing.element_type, new.element_type)
+            length = existing.length if existing.length == new.length else None
+            return ListType(element, length=length)
+        return UnknownType()
+
+    def _record_function_call(self, func_name: str, arg_types: List[Type]) -> None:
+        func_def = self.function_defs.get(func_name)
+        if not func_def or len(func_def.args.args) != len(arg_types):
+            return
+
+        current = self.function_param_hints.get(
+            func_name, [UnknownType() for _ in arg_types]
+        )
+        merged = [
+            self._unify_types(old, new) for old, new in zip(current, arg_types)
+        ]
+        self.function_param_hints[func_name] = merged
 
 
 def infer_types(tree: ast.AST, filename: str, lines: List[str]) -> TypeContext:

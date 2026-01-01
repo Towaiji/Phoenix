@@ -83,9 +83,12 @@ class CEmitter:
         old_declared = self.declared
         self.declared = set(args)
 
-        params = ", ".join(
-            f"{c_type_name(t)} {a}" for t, a in zip(param_types, args)
-        )
+        def _param_decl(t: Type, name: str) -> str:
+            if isinstance(t, ListType):
+                return f"{c_type_name(t.element_type)} {name}[]"
+            return f"{c_type_name(t)} {name}"
+
+        params = ", ".join(_param_decl(t, a) for t, a in zip(param_types, args))
         self.emit(f"{c_type_name(return_type)} {name}({params}) {{")
 
         self.indent += 1

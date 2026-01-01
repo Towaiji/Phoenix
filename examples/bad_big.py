@@ -1,18 +1,29 @@
 import math
 
+# ----- type instability -----
 x = 5
-x = "oops"          # Rule 1: type mutation
+x = "hello"          # ❌ type change
 
-data = [1, "two"]   # Rule 2: mixed list
+# ----- mixed list -----
+bad_list = [1, 2.0]  # ❌ mixed types
 
-eval("print(x)")    # Rule 3: eval
-
+# ----- dynamic loop -----
 n = 10
-for i in range(n):  # Rule 4: dynamic loop bound
+for i in range(n):   # ❌ dynamic bound
     print(i)
 
-y = 0
-while y < 5:        # Rule 4: while loop
-    y = y + 1
+# ----- forbidden execution -----
+eval("x + 1")        # ❌ eval
 
-mod = __import__("math")  # Rule 3: dynamic import
+# ----- unsupported call -----
+def f(a):
+    return a
+
+y = f("string")      # ❌ wrong type usage
+
+# ----- invalid list usage -----
+nums = [1, 2, 3]
+nums[0] = 1.5        # ❌ list[int] mutated with float
+
+# ----- invalid math -----
+z = math.sqrt("hi")  # ❌ sqrt on string
