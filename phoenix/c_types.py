@@ -13,6 +13,9 @@ def c_type_name(t: Type) -> str:
         return "double"
     if isinstance(t, BoolType):
         return "bool"
+    from phoenix.types import StringType  # local import to avoid cycle
+    if isinstance(t, StringType):
+        return "const char *"
     if isinstance(t, ListType):
         return c_type_name(t.element_type)
     # Unknown fallback keeps the C code compilable; checker should guard earlier.

@@ -43,6 +43,11 @@ class BoolType(Type):
 
 
 @dataclass(frozen=True)
+class StringType(Type):
+    name: str = "string"
+
+
+@dataclass(frozen=True)
 class ListType(Type):
     element_type: Type
     length: Optional[int] = None

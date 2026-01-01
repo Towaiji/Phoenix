@@ -11,6 +11,7 @@ from phoenix.types import (
     FunctionType,
     IntType,
     ListType,
+    StringType,
     Type,
     UnknownType,
 )
@@ -194,6 +195,8 @@ class TypeInferencer(ast.NodeVisitor):
                 return self.annotate(expr, FloatType())
             if isinstance(value, int):
                 return self.annotate(expr, IntType())
+            if isinstance(value, str):
+                return self.annotate(expr, StringType())
             return self.annotate(expr, UnknownType())
 
         if isinstance(expr, ast.Name):
@@ -306,6 +309,8 @@ class TypeInferencer(ast.NodeVisitor):
             isinstance(existing, FloatType) and isinstance(new, IntType)
         ):
             return FloatType()
+        if isinstance(existing, StringType) or isinstance(new, StringType):
+            return UnknownType()
         if isinstance(existing, ListType) and isinstance(new, ListType):
             element = self._unify_types(existing.element_type, new.element_type)
             length = existing.length if existing.length == new.length else None

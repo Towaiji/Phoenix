@@ -1,4 +1,5 @@
 import ast
+import json
 from typing import Iterable, Set, List 
 
 from phoenix.c_types import c_type_name, required_headers
@@ -8,6 +9,7 @@ from phoenix.types import (
     FloatType,
     IntType,
     ListType,
+    StringType,
     Type,
     UnknownType,
 )
@@ -132,7 +134,12 @@ class CEmitter:
                 arg = call.args[0]
                 expr = self.expr(arg)
                 t = self._type_of(arg)
-                fmt = "%f" if isinstance(t, FloatType) else "%d"
+                if isinstance(t, FloatType):
+                    fmt = "%f"
+                elif isinstance(t, StringType):
+                    fmt = "%s"
+                else:
+                    fmt = "%d"
                 self.emit(f'printf("{fmt}\\n", {expr});')
 
     def expr(self, node):
@@ -142,6 +149,8 @@ class CEmitter:
         if isinstance(node, ast.Constant):
             if isinstance(node.value, bool):
                 return "true" if node.value else "false"
+            if isinstance(node.value, str):
+                return json.dumps(node.value)
             return str(node.value)
 
         if isinstance(node, ast.Subscript):

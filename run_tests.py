@@ -16,6 +16,7 @@ EXPECTED_FAIL = {
     "bad_if_partial_assign.py",
     "bad_if_type.py",
     "bad_if_condition.py",
+    "bad_string_mixed.py",
     "bad_big.py",
     "bench_python.py"
 }
