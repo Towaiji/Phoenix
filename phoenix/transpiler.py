@@ -7,6 +7,7 @@ def transpile(tree):
     lines.append("int main() {")
 
     indent = "    "
+    last_int_var = None
 
     for node in ast.walk(tree):
 
@@ -22,6 +23,7 @@ def transpile(tree):
             # int literal
             if isinstance(value, ast.Constant) and isinstance(value.value, int):
                 lines.append(f"{indent}int {name} = {value.value};")
+                last_int_var = name
 
             # list[int]
             elif isinstance(value, ast.List):
@@ -45,7 +47,6 @@ def transpile(tree):
                     f"{indent}for (int {var} = 0; {var} < {bound}; {var}++) {{"
                 )
 
-                # body
                 for stmt in node.body:
                     if isinstance(stmt, ast.Assign):
                         t = stmt.targets[0].id
@@ -56,8 +57,14 @@ def transpile(tree):
                             lines.append(
                                 f"{indent*2}{t} = {left} + {right};"
                             )
+                            last_int_var = t
 
                 lines.append(f"{indent}}}")
+
+    # Print result
+    if last_int_var is not None:
+        lines.append("")
+        lines.append(f'{indent}printf("%d\\n", {last_int_var});')
 
     lines.append("")
     lines.append(f"{indent}return 0;")
