@@ -12,6 +12,8 @@ EXPECTED_FAIL = {
     "bad_import.py",
     "bad_while.py",
     "bad_for_dynamic.py",
+    "bad_if_type.py",
+    "bad_if_condition.py",
     "bad_big.py",
     "bench_python.py"
 }

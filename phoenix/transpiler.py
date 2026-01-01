@@ -39,6 +39,8 @@ class CEmitter:
             self.emit_assign(node)
         elif isinstance(node, ast.For):
             self.emit_for(node)
+        elif isinstance(node, ast.If):
+            self.emit_if(node)
         elif isinstance(node, ast.Expr):
             self.emit_expr(node)
 
@@ -114,6 +116,15 @@ class CEmitter:
         self.emit_block(node.body)
         self.emit("}")
 
+    def emit_if(self, node: ast.If):
+        cond = self.expr(node.test)
+        self.emit(f"if ({cond}) {{")
+        self.emit_block(node.body)
+        if node.orelse:
+            self.emit("} else {")
+            self.emit_block(node.orelse)
+        self.emit("}")
+
     def emit_expr(self, node):
         if isinstance(node.value, ast.Call):
             call = node.value
@@ -137,6 +148,26 @@ class CEmitter:
             arr = self.expr(node.value)
             idx = self.expr(node.slice)
             return f"{arr}[{idx}]"
+
+        if isinstance(node, ast.Compare):
+            left = self.expr(node.left)
+            right = self.expr(node.comparators[0])
+            op = node.ops[0]
+            if isinstance(op, ast.Eq):
+                op_str = "=="
+            elif isinstance(op, ast.NotEq):
+                op_str = "!="
+            elif isinstance(op, ast.Lt):
+                op_str = "<"
+            elif isinstance(op, ast.LtE):
+                op_str = "<="
+            elif isinstance(op, ast.Gt):
+                op_str = ">"
+            elif isinstance(op, ast.GtE):
+                op_str = ">="
+            else:
+                op_str = "=="
+            return f"{left} {op_str} {right}"
 
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name) and node.func.id == "int":

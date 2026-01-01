@@ -46,6 +46,8 @@ class TypeInferencer(ast.NodeVisitor):
         self.return_types: List[Type] = []
         self.function_defs: Dict[str, ast.FunctionDef] = {}
         self.function_param_hints: Dict[str, List[Type]] = {}
+        self.in_if: bool = False
+        self.conditional_depth: int = 0
 
     def infer(self, tree: ast.AST) -> TypeContext:
         function_defs = [stmt for stmt in tree.body if isinstance(stmt, ast.FunctionDef)]
@@ -118,6 +120,8 @@ class TypeInferencer(ast.NodeVisitor):
         target = node.targets[0]
         value_type = self.infer_expr(node.value)
         if isinstance(target, ast.Name):
+            if self.conditional_depth > 0 and target.id not in self.env_stack[-1]:
+                self.error(f"Variable '{target.id}' must exist before conditional assignment", node)
             self.bind(target.id, value_type, node)
             self.annotate(target, value_type)
         self.annotate(node, value_type)
@@ -133,6 +137,25 @@ class TypeInferencer(ast.NodeVisitor):
             self.annotate(node.target, IntType())
         for stmt in node.body:
             self.visit(stmt)
+
+    def visit_If(self, node: ast.If) -> None:
+        if self.in_if:
+            self.error("Nested if-statements are not supported", node)
+        if node.orelse and isinstance(node.orelse[0], ast.If):
+            self.error("elif is not supported", node)
+
+        cond_type = self.infer_expr(node.test)
+        if not isinstance(cond_type, BoolType):
+            self.error("if condition must be a bool", node.test)
+
+        self.in_if = True
+        self.conditional_depth += 1
+        for stmt in node.body:
+            self.visit(stmt)
+        for stmt in node.orelse:
+            self.visit(stmt)
+        self.conditional_depth -= 1
+        self.in_if = False
 
     def visit_Return(self, node: ast.Return) -> None:
         if node.value is None:
@@ -185,6 +208,21 @@ class TypeInferencer(ast.NodeVisitor):
             else:
                 result = UnknownType()
             return self.annotate(expr, result)
+
+        if isinstance(expr, ast.Compare):
+            if len(expr.ops) != 1 or len(expr.comparators) != 1:
+                self.error("Chained comparisons are not supported", expr)
+            left = self.infer_expr(expr.left)
+            right = self.infer_expr(expr.comparators[0])
+
+            if not (left.is_numeric() and right.is_numeric()):
+                self.error("Comparisons are only supported for numeric types", expr)
+
+            op = expr.ops[0]
+            if not isinstance(op, (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)):
+                self.error("Unsupported comparison operator", expr)
+
+            return self.annotate(expr, BoolType())
 
         if isinstance(expr, ast.BinOp):
             left = self.infer_expr(expr.left)
