@@ -122,6 +122,10 @@ class TypeInferencer(ast.NodeVisitor):
             self.annotate(target, value_type)
         self.annotate(node, value_type)
 
+    def visit_Expr(self, node: ast.Expr) -> None:
+        value_type = self.infer_expr(node.value)
+        self.annotate(node, value_type)
+
     def visit_For(self, node: ast.For) -> None:
         # range() iterates integers; enforce that here.
         if isinstance(node.target, ast.Name):
@@ -161,9 +165,17 @@ class TypeInferencer(ast.NodeVisitor):
                 return self.annotate(expr, ListType(UnknownType(), length=0))
 
             elem_types = [self.infer_expr(e) for e in expr.elts]
-            element_type = elem_types[0]
-            for t in elem_types[1:]:
-                element_type = self._unify_types(element_type, t)
+            element_type: Type = UnknownType()
+            for t in elem_types:
+                if isinstance(t, UnknownType):
+                    if not isinstance(element_type, UnknownType):
+                        self.error("List elements must share a single static type", expr)
+                    continue
+                if isinstance(element_type, UnknownType):
+                    element_type = t
+                    continue
+                if t != element_type:
+                    self.error("List elements must share a single static type", expr)
             return self.annotate(expr, ListType(element_type, length=len(expr.elts)))
 
         if isinstance(expr, ast.Subscript):
