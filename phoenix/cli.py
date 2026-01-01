@@ -2,6 +2,10 @@ import sys
 import ast
 from phoenix.checker import check_types
 from phoenix.errors import PhoenixError
+from phoenix.transpiler import transpile
+import subprocess
+import tempfile
+import os
 
 def main():
     if len(sys.argv) != 2:
@@ -17,7 +21,16 @@ def main():
 
         tree = ast.parse(source)
         check_types(tree, filename, lines)
-
+        
+        c_code = transpile(tree)
+        
+        with open("output.c", "w") as f:
+            f.write(c_code)
+            
+        subprocess.run(["gcc", "output.c", "-o", "output"], check=True)
+        
+        print("✓ Compiled to native binary: ./output")
+        
         print("✓ Phoenix approved. Code is type-stable.")
 
     except PhoenixError as e:
