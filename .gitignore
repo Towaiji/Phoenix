@@ -9,3 +9,9 @@ venv/
 
 # OS junk
 .DS_Store
+
+# Phoenix build outputs
+output
+output.c
+.phoenix_cache/
+*.bin
