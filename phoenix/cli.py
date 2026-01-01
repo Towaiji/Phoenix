@@ -43,10 +43,10 @@ def main():
 
         # ---- parse + check ----
         tree = ast.parse(source)
-        check_types(tree, filename, lines)
+        type_ctx = check_types(tree, filename, lines)
 
         # ---- transpile ----
-        c_code = transpile(tree)
+        c_code = transpile(tree, type_ctx)
 
         with open("output.c", "w") as f:
             f.write(c_code)

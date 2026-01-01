@@ -1,14 +1,27 @@
 import ast
+from typing import Iterable, Set, List 
+
+from phoenix.c_types import c_type_name, required_headers
+from phoenix.type_inference import TypeContext
+from phoenix.types import (
+    BoolType,
+    FloatType,
+    IntType,
+    ListType,
+    Type,
+    UnknownType,
+)
+
 
 class CEmitter:
-    def __init__(self):
+    def __init__(self, type_ctx: TypeContext):
         self.lines = []
         self.indent = 0
-        self.declared = set()
+        self.declared: Set[str] = set()
         self.functions = []
-        self.uses_math = False
+        self.type_ctx = type_ctx
 
-    def emit(self, line=""):
+    def emit(self, line: str = ""):
         self.lines.append("    " * self.indent + line)
 
     def emit_block(self, body):
@@ -17,90 +30,63 @@ class CEmitter:
             self.emit_stmt(stmt)
         self.indent -= 1
 
+    # ---- helpers -------------------------------------------------
+    def _type_of(self, node: ast.AST) -> Type:
+        return self.type_ctx.node_types.get(node, UnknownType())
+
     def emit_stmt(self, node):
-        # Assignment
         if isinstance(node, ast.Assign):
             self.emit_assign(node)
-
-        # For loop
         elif isinstance(node, ast.For):
             self.emit_for(node)
-
-        # Expression (used for print)
         elif isinstance(node, ast.Expr):
             self.emit_expr(node)
 
-        # Ignore everything else for now
-
-    def emit_assign(self, node):
+    def emit_assign(self, node: ast.Assign):
         target = node.targets[0]
         value = node.value
 
-        # x = ...
         if isinstance(target, ast.Name):
             name = target.id
             is_new = name not in self.declared
+            t = self._type_of(target)
+            c_type = c_type_name(t)
 
-            # int literal
-            if isinstance(value, ast.Constant) and isinstance(value.value, int):
-                if is_new:
-                    self.emit(f"int {name} = {value.value};")
-                    self.declared.add(name)
-                else:
-                    self.emit(f"{name} = {value.value};")
-
-            # list[int]
-            elif isinstance(value, ast.List):
-                elems = [str(e.value) for e in value.elts]
-                size = len(elems)
+            if isinstance(value, ast.List) and isinstance(t, ListType):
+                elems = [self.expr(e) for e in value.elts]
+                size = t.length if t.length is not None else len(elems)
                 init = ", ".join(elems)
-                self.emit(f"int {name}[{size}] = {{{init}}};")
+                self.emit(f"{c_type} {name}[{size}] = {{{init}}};")
                 self.declared.add(name)
+                return
 
-            # x = array[i]
-            elif isinstance(value, ast.Subscript):
-                rhs = self.expr(value)
-                if is_new:
-                    self.emit(f"int {name} = {rhs};")
-                    self.declared.add(name)
-                else:
-                    self.emit(f"{name} = {rhs};")
+            rhs = self.expr(value)
+            if is_new:
+                self.emit(f"{c_type} {name} = {rhs};")
+                self.declared.add(name)
+            else:
+                self.emit(f"{name} = {rhs};")
 
-            # x = expression
-            elif isinstance(value, ast.BinOp):
-                expr = self.expr(value)
-                if is_new:
-                    self.emit(f"int {name} = {expr};")
-                    self.declared.add(name)
-                else:
-                    self.emit(f"{name} = {expr};")
-                    
-            # x = function_call(...)
-            elif isinstance(value, ast.Call):
-                expr = self.expr(value)
-                if is_new:
-                    self.emit(f"int {name} = {expr};")
-                    self.declared.add(name)
-                else:
-                    self.emit(f"{name} = {expr};")
-                    
-        # array[i] = expr
         elif isinstance(target, ast.Subscript):
             lhs = self.expr(target)
             rhs = self.expr(value)
             self.emit(f"{lhs} = {rhs};")
 
-
-    def emit_function(self, node):
+    def emit_function(self, node: ast.FunctionDef):
         name = node.name
         args = [arg.arg for arg in node.args.args]
+        func_type = self.type_ctx.functions.get(name)
 
-        # new scope for function
+        param_types = func_type.param_types if func_type else [UnknownType()] * len(args)
+        return_type = func_type.return_type if func_type else IntType()
+
         old_declared = self.declared
-        self.declared = set(args)  # parameters are already declared
+        self.declared = set(args)
 
-        params = ", ".join(f"int {a}" for a in args)
-        self.emit(f"int {name}({params}) {{")
+        params = ", ".join(
+            f"{c_type_name(t)} {a}" for t, a in zip(param_types, args)
+        )
+        self.emit(f"{c_type_name(return_type)} {name}({params}) {{")
 
         self.indent += 1
         for stmt in node.body:
@@ -113,8 +99,6 @@ class CEmitter:
 
         self.emit("}")
         self.emit()
-
-        # restore previous scope
         self.declared = old_declared
 
     def emit_for(self, node):
@@ -122,24 +106,28 @@ class CEmitter:
         bound = iter_call.args[0].value
         var = node.target.id
 
-        self.emit(f"for (int {var} = 0; {var} < {bound}; {var}++) {{")
+        c_type = c_type_name(self._type_of(node.target))
+        self.emit(f"for ({c_type} {var} = 0; {var} < {bound}; {var}++) {{")
         self.emit_block(node.body)
         self.emit("}")
 
     def emit_expr(self, node):
-        # print(x)
         if isinstance(node.value, ast.Call):
             call = node.value
             if isinstance(call.func, ast.Name) and call.func.id == "print":
                 arg = call.args[0]
                 expr = self.expr(arg)
-                self.emit(f'printf("%d\\n", {expr});')
+                t = self._type_of(arg)
+                fmt = "%f" if isinstance(t, FloatType) else "%d"
+                self.emit(f'printf("{fmt}\\n", {expr});')
 
     def expr(self, node):
         if isinstance(node, ast.Name):
             return node.id
 
         if isinstance(node, ast.Constant):
+            if isinstance(node.value, bool):
+                return "true" if node.value else "false"
             return str(node.value)
 
         if isinstance(node, ast.Subscript):
@@ -148,31 +136,25 @@ class CEmitter:
             return f"{arr}[{idx}]"
 
         if isinstance(node, ast.Call):
-            # int(x) → (int)(x)
             if isinstance(node.func, ast.Name) and node.func.id == "int":
                 arg = self.expr(node.args[0])
                 return f"(int)({arg})"
 
-            # math.sqrt(x) → sqrt(x)
             if isinstance(node.func, ast.Attribute):
                 if (
                     isinstance(node.func.value, ast.Name)
                     and node.func.value.id == "math"
                     and node.func.attr == "sqrt"
                 ):
-                    self.uses_math = True
                     arg = self.expr(node.args[0])
                     return f"sqrt({arg})"
 
-            # normal Phoenix function call
             if isinstance(node.func, ast.Name):
                 func = node.func.id
                 args = ", ".join(self.expr(a) for a in node.args)
                 return f"{func}({args})"
 
             raise Exception("Unsupported function call")
-
-
 
         if isinstance(node, ast.BinOp):
             left = self.expr(node.left)
@@ -194,26 +176,27 @@ class CEmitter:
         return "0"
 
 
-def transpile(tree):
-    emitter = CEmitter()
+def _collect_types(type_ctx: TypeContext) -> Iterable[Type]:
+    seen: List[Type] = []
+    seen.extend(type_ctx.globals.values())
+    for ft in type_ctx.functions.values():
+        seen.extend(list(ft.param_types))
+        seen.append(ft.return_type)
+    return seen
 
-    emitter.emit("#include <stdio.h>")
 
-    # emit math header only if needed
-    for n in ast.walk(tree):
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
-            if (
-                isinstance(n.func.value, ast.Name)
-                and n.func.value.id == "math"
-                and n.func.attr == "sqrt"
-            ):
-                emitter.emit("#include <math.h>")
-                break
+def transpile(tree, type_ctx: TypeContext):
+    emitter = CEmitter(type_ctx)
 
+    headers = {"<stdio.h>"}
+    headers.update(required_headers(_collect_types(type_ctx)))
+    if type_ctx.uses_math:
+        headers.add("<math.h>")
+
+    for h in sorted(headers):
+        emitter.emit(f"#include {h}")
     emitter.emit()
 
-
-    # pass 1: collect functions
     for stmt in tree.body:
         if isinstance(stmt, ast.FunctionDef):
             emitter.emit_function(stmt)
@@ -222,7 +205,6 @@ def transpile(tree):
     emitter.indent += 1
     emitter.declared = set()
 
-    # pass 2: main body
     for stmt in tree.body:
         if not isinstance(stmt, ast.FunctionDef):
             emitter.emit_stmt(stmt)
@@ -232,4 +214,3 @@ def transpile(tree):
     emitter.emit("}")
 
     return "\n".join(emitter.lines)
-
