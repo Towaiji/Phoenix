@@ -5,6 +5,8 @@ class CEmitter:
         self.lines = []
         self.indent = 0
         self.declared = set()
+        self.functions = []
+        self.uses_math = False
 
     def emit(self, line=""):
         self.lines.append("    " * self.indent + line)
@@ -72,13 +74,48 @@ class CEmitter:
                     self.declared.add(name)
                 else:
                     self.emit(f"{name} = {expr};")
-
+                    
+            # x = function_call(...)
+            elif isinstance(value, ast.Call):
+                expr = self.expr(value)
+                if is_new:
+                    self.emit(f"int {name} = {expr};")
+                    self.declared.add(name)
+                else:
+                    self.emit(f"{name} = {expr};")
+                    
         # array[i] = expr
         elif isinstance(target, ast.Subscript):
             lhs = self.expr(target)
             rhs = self.expr(value)
             self.emit(f"{lhs} = {rhs};")
 
+
+    def emit_function(self, node):
+        name = node.name
+        args = [arg.arg for arg in node.args.args]
+
+        # new scope for function
+        old_declared = self.declared
+        self.declared = set(args)  # parameters are already declared
+
+        params = ", ".join(f"int {a}" for a in args)
+        self.emit(f"int {name}({params}) {{")
+
+        self.indent += 1
+        for stmt in node.body:
+            if isinstance(stmt, ast.Return):
+                expr = self.expr(stmt.value)
+                self.emit(f"return {expr};")
+            else:
+                self.emit_stmt(stmt)
+        self.indent -= 1
+
+        self.emit("}")
+        self.emit()
+
+        # restore previous scope
+        self.declared = old_declared
 
     def emit_for(self, node):
         iter_call = node.iter
@@ -110,6 +147,33 @@ class CEmitter:
             idx = self.expr(node.slice)
             return f"{arr}[{idx}]"
 
+        if isinstance(node, ast.Call):
+            # int(x) → (int)(x)
+            if isinstance(node.func, ast.Name) and node.func.id == "int":
+                arg = self.expr(node.args[0])
+                return f"(int)({arg})"
+
+            # math.sqrt(x) → sqrt(x)
+            if isinstance(node.func, ast.Attribute):
+                if (
+                    isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "math"
+                    and node.func.attr == "sqrt"
+                ):
+                    self.uses_math = True
+                    arg = self.expr(node.args[0])
+                    return f"sqrt({arg})"
+
+            # normal Phoenix function call
+            if isinstance(node.func, ast.Name):
+                func = node.func.id
+                args = ", ".join(self.expr(a) for a in node.args)
+                return f"{func}({args})"
+
+            raise Exception("Unsupported function call")
+
+
+
         if isinstance(node, ast.BinOp):
             left = self.expr(node.left)
             right = self.expr(node.right)
@@ -134,15 +198,38 @@ def transpile(tree):
     emitter = CEmitter()
 
     emitter.emit("#include <stdio.h>")
-    emitter.emit()
-    emitter.emit("int main() {")
 
-    emitter.indent += 1
+    # emit math header only if needed
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
+            if (
+                isinstance(n.func.value, ast.Name)
+                and n.func.value.id == "math"
+                and n.func.attr == "sqrt"
+            ):
+                emitter.emit("#include <math.h>")
+                break
+
+    emitter.emit()
+
+
+    # pass 1: collect functions
     for stmt in tree.body:
-        emitter.emit_stmt(stmt)
+        if isinstance(stmt, ast.FunctionDef):
+            emitter.emit_function(stmt)
+
+    emitter.emit("int main() {")
+    emitter.indent += 1
+    emitter.declared = set()
+
+    # pass 2: main body
+    for stmt in tree.body:
+        if not isinstance(stmt, ast.FunctionDef):
+            emitter.emit_stmt(stmt)
 
     emitter.emit("return 0;")
     emitter.indent -= 1
     emitter.emit("}")
 
     return "\n".join(emitter.lines)
+
