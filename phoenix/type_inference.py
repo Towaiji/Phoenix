@@ -68,6 +68,11 @@ class TypeInferencer(ast.NodeVisitor):
         # Second pass: analyze functions with any recorded parameter hints.
         for func in function_defs:
             self.visit(func)
+
+        # Third pass: refresh globals now that function return types are known.
+        for stmt in tree.body:
+            if not isinstance(stmt, ast.FunctionDef):
+                self.visit(stmt)
         return self.ctx
 
     # ---- helpers -------------------------------------------------
@@ -87,7 +92,7 @@ class TypeInferencer(ast.NodeVisitor):
     def bind(self, name: str, t: Type, node: ast.AST) -> None:
         env = self.env_stack[-1]
         existing = env.get(name)
-        if existing and existing != t:
+        if existing and not isinstance(existing, UnknownType) and existing != t:
             self.error(f"Variable '{name}' changed type ({existing} → {t})", node)
         env[name] = t
 

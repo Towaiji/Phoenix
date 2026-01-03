@@ -4,8 +4,12 @@ import math
 x = 5
 x = "hello"          # ❌ type change
 
+msg = "start"
+msg = 3              # ❌ type change
+
 # ----- mixed list -----
 bad_list = [1, 2.0]  # ❌ mixed types
+bad_strings = ["hi", 2]  # ❌ mixed string/int
 
 # ----- dynamic loop -----
 n = 10
@@ -24,6 +28,9 @@ y = f("string")      # ❌ wrong type usage
 # ----- invalid list usage -----
 nums = [1, 2, 3]
 nums[0] = 1.5        # ❌ list[int] mutated with float
+
+names = ["alice", "bob"]
+names[1] = 3         # ❌ list[string] mutated with int
 
 # ----- invalid math -----
 z = math.sqrt("hi")  # ❌ sqrt on string
