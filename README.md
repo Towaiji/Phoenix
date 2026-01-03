@@ -9,6 +9,17 @@ Phoenix eliminates Python entirely.
 
 ---
 
+## Quickstart
+
+```bash
+python3 -m phoenix.cli examples/good_big.py   # emits output.c and ./output
+./output                                      # run the native binary
+```
+
+Phoenix caches binaries in `.phoenix_cache/` keyed by source hash, so repeat builds are instant.
+
+---
+
 ## Why Phoenix
 
 Python is easy to write but slow to execute due to:
@@ -85,6 +96,30 @@ Phoenix achieves **50–100× speedups** on numeric workloads by eliminating dyn
 
 ---
 
+## Language Rules (v0)
+
+1. Variables may not change type.
+2. Lists must contain one static element type.
+3. No `eval`, `exec`, reflection, or dynamic imports.
+4. Loop bounds must be statically known.
+5. Function return type must be consistent.
+6. `for` loops must be `range(<int literal>)`; `while` is forbidden.
+7. `if` conditions must be boolean; assignments must exist in both branches (no `elif`/nested `if` yet).
+
+If any rule is violated, compilation fails with a precise error message.
+
+---
+
+## Supported Constructs (today)
+
+- Types: `int`, `float`, `bool`, `string`, fixed-length homogeneous list literals.
+- Control flow: `for` over `range(<int literal>)`, `if/else` (no `elif`/nesting).
+- Functions: positional parameters with inferred types; returns must be type-stable.
+- Builtins: `print`, `int(...)`, `math.sqrt` (emits `#include <math.h>` as needed).
+- Codegen: C arrays for list literals; `printf` for output; `gcc -O3` compilation.
+
+---
+
 ## Architecture Overview
 
 Phoenix pipeline:
@@ -99,14 +134,9 @@ Phoenix pipeline:
 
 ## Status
 
-Phoenix currently supports:
-- integers
-- lists of integers
-- static `for` loops
-- arithmetic expressions
-- array reads and writes
+Phoenix is a minimal prototype focused on safety over breadth:
 
-Future work includes:
-- functions
-- explicit print semantics
-- richer expression support
+- Missing: bounds proofs for indexing, boolean operators (`and`/`or`), `elif`/nested `if`, richer stdlib, dynamic list operations, string manipulation beyond literals/print.
+- Codegen is deliberately simple: flat arrays, no heap allocation, minimal header selection.
+
+Future work: expand the safe subset (boolean ops, richer math/stdlib), improve diagnostics, and add stronger static checks (array bounds, inter-file modules) while keeping zero-ambiguity guarantees.
