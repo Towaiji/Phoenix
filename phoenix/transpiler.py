@@ -158,25 +158,51 @@ class CEmitter:
             idx = self.expr(node.slice)
             return f"{arr}[{idx}]"
 
+        if isinstance(node, ast.BoolOp):
+            if isinstance(node.op, ast.And):
+                op = "&&"
+            elif isinstance(node.op, ast.Or):
+                op = "||"
+            else:
+                op = "&&"
+            parts = [self.expr(v) for v in node.values]
+            joined = f" {op} ".join(parts)
+            if len(parts) == 1:
+                return joined
+            return f"({joined})"
+
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            operand = self.expr(node.operand)
+            return f"!({operand})"
+
         if isinstance(node, ast.Compare):
             left = self.expr(node.left)
-            right = self.expr(node.comparators[0])
-            op = node.ops[0]
-            if isinstance(op, ast.Eq):
-                op_str = "=="
-            elif isinstance(op, ast.NotEq):
-                op_str = "!="
-            elif isinstance(op, ast.Lt):
-                op_str = "<"
-            elif isinstance(op, ast.LtE):
-                op_str = "<="
-            elif isinstance(op, ast.Gt):
-                op_str = ">"
-            elif isinstance(op, ast.GtE):
-                op_str = ">="
-            else:
-                op_str = "=="
-            return f"{left} {op_str} {right}"
+            comparator_exprs = [self.expr(c) for c in node.comparators]
+            comparisons: List[str] = []
+            current_left = left
+
+            def _op_str(op_node: ast.AST) -> str:
+                if isinstance(op_node, ast.Eq):
+                    return "=="
+                if isinstance(op_node, ast.NotEq):
+                    return "!="
+                if isinstance(op_node, ast.Lt):
+                    return "<"
+                if isinstance(op_node, ast.LtE):
+                    return "<="
+                if isinstance(op_node, ast.Gt):
+                    return ">"
+                if isinstance(op_node, ast.GtE):
+                    return ">="
+                return "=="
+
+            for op_node, right in zip(node.ops, comparator_exprs):
+                comparisons.append(f"{current_left} {_op_str(op_node)} {right}")
+                current_left = right
+
+            if len(comparisons) == 1:
+                return comparisons[0]
+            return "(" + " && ".join(comparisons) + ")"
 
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name) and node.func.id == "int":

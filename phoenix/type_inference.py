@@ -50,6 +50,7 @@ class TypeInferencer(ast.NodeVisitor):
         self.in_if: bool = False
         self.conditional_depth: int = 0
         self.branch_assignments: Dict[str, ast.AST] = {}
+        self.analysis_pass: str = "init"
 
     def infer(self, tree: ast.AST) -> TypeContext:
         function_defs = [stmt for stmt in tree.body if isinstance(stmt, ast.FunctionDef)]
@@ -61,15 +62,18 @@ class TypeInferencer(ast.NodeVisitor):
             self.function_defs[func.name] = func
 
         # First pass: globals and calls (skip function bodies).
+        self.analysis_pass = "globals_first"
         for stmt in tree.body:
             if not isinstance(stmt, ast.FunctionDef):
                 self.visit(stmt)
 
         # Second pass: analyze functions with any recorded parameter hints.
+        self.analysis_pass = "functions"
         for func in function_defs:
             self.visit(func)
 
         # Third pass: refresh globals now that function return types are known.
+        self.analysis_pass = "globals_final"
         for stmt in tree.body:
             if not isinstance(stmt, ast.FunctionDef):
                 self.visit(stmt)
@@ -153,7 +157,10 @@ class TypeInferencer(ast.NodeVisitor):
 
         cond_type = self.infer_expr(node.test)
         if not isinstance(cond_type, BoolType):
-            self.error("if condition must be a bool", node.test)
+            if isinstance(cond_type, UnknownType) and self.analysis_pass == "globals_first":
+                pass
+            else:
+                self.error("if condition must be a bool", node.test)
 
         body_assigned, body_first = self._collect_assignments(node.body)
         else_assigned, else_first = self._collect_assignments(node.orelse)
@@ -234,18 +241,30 @@ class TypeInferencer(ast.NodeVisitor):
                 result = UnknownType()
             return self.annotate(expr, result)
 
+        if isinstance(expr, ast.BoolOp):
+            operand_types = [self.infer_expr(v) for v in expr.values]
+            for t in operand_types:
+                if not isinstance(t, BoolType):
+                    self.error("Logical operations require boolean operands", expr)
+            return self.annotate(expr, BoolType())
+
+        if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.Not):
+            operand_type = self.infer_expr(expr.operand)
+            if not isinstance(operand_type, BoolType):
+                self.error("Logical operations require boolean operands", expr)
+            return self.annotate(expr, BoolType())
+
         if isinstance(expr, ast.Compare):
-            if len(expr.ops) != 1 or len(expr.comparators) != 1:
-                self.error("Chained comparisons are not supported", expr)
-            left = self.infer_expr(expr.left)
-            right = self.infer_expr(expr.comparators[0])
+            allowed_ops = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
+            for op in expr.ops:
+                if not isinstance(op, allowed_ops):
+                    self.error("Unsupported comparison operator", expr)
 
-            if not (left.is_numeric() and right.is_numeric()):
-                self.error("Comparisons are only supported for numeric types", expr)
-
-            op = expr.ops[0]
-            if not isinstance(op, (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)):
-                self.error("Unsupported comparison operator", expr)
+            operands = [expr.left] + list(expr.comparators)
+            operand_types = [self.infer_expr(o) for o in operands]
+            for t in operand_types:
+                if not t.is_numeric():
+                    self.error("Comparisons are only supported for numeric types", expr)
 
             return self.annotate(expr, BoolType())
 

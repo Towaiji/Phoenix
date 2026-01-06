@@ -18,6 +18,7 @@ EXPECTED_FAIL = {
     "bad_if_condition.py",
     "bad_string_mixed.py",
     "bad_big.py",
+    "bad_logical_operands.py",
     "bench_python.py"
 }
 
