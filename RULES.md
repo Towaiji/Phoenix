@@ -14,10 +14,11 @@ Phoenix v1 Rules
 2. Containers stay homogeneous.
 3. No dynamic code loading.
 4. Loops need clear termination:
-   - for over finite ranges or sequences with provable bounds
-   - while allowed only if a progressing guard and finite upper bound can be proven
+   - for over finite ranges or sequences with known bounds
+   - while allowed only with an explicit bound/counter that moves monotonically toward a literal limit
 5. Complex logic is fine if types and termination remain provable.
-6. Transpilation is explicit:
+6. Transpilation is explicit (optional):
    - phoenix check file.py runs analysis only
    - phoenix build file.py always transpiles to C and compiles
+   - phoenix file.py behaves as today (analyze then build/run)
 7. Logical ops and comparisons (incl. chained) require bool/numeric operands and yield bool for predictable transpilation.
