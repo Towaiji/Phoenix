@@ -15,10 +15,10 @@ Phoenix eliminates Python entirely.
 python3 -m phoenix.cli examples/good_big.py   # emits output.c and ./output
 ./output                                      # run the native binary
 
-# optional future CLI:
+# optional CLI:
 # python3 -m phoenix.cli check examples/foo.py   # analysis only
 # python3 -m phoenix.cli build examples/foo.py   # force transpile + compile
-# python3 -m phoenix.cli examples/foo.py         # current default: analyze then build/run
+# python3 -m phoenix.cli examples/foo.py         # default: analyze then build/run
 ```
 
 Phoenix caches binaries in `.phoenix_cache/` keyed by source hash, so repeat builds are instant.
