@@ -149,6 +149,15 @@ class TypeInferencer(ast.NodeVisitor):
         for stmt in node.body:
             self.visit(stmt)
 
+    def visit_While(self, node: ast.While) -> None:
+        cond_type = self.infer_expr(node.test)
+        if not isinstance(cond_type, BoolType):
+            if not (isinstance(cond_type, UnknownType) and self.analysis_pass == "globals_first"):
+                self.error("while condition must be a bool", node.test)
+
+        for stmt in node.body:
+            self.visit(stmt)
+
     def visit_If(self, node: ast.If) -> None:
         if self.in_if:
             self.error("Nested if-statements are not supported", node)

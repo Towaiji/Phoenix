@@ -41,6 +41,8 @@ class CEmitter:
             self.emit_assign(node)
         elif isinstance(node, ast.For):
             self.emit_for(node)
+        elif isinstance(node, ast.While):
+            self.emit_while(node)
         elif isinstance(node, ast.If):
             self.emit_if(node)
         elif isinstance(node, ast.Expr):
@@ -115,6 +117,12 @@ class CEmitter:
 
         c_type = c_type_name(self._type_of(node.target))
         self.emit(f"for ({c_type} {var} = 0; {var} < {bound}; {var}++) {{")
+        self.emit_block(node.body)
+        self.emit("}")
+
+    def emit_while(self, node: ast.While):
+        cond = self.expr(node.test)
+        self.emit(f"while ({cond}) {{")
         self.emit_block(node.body)
         self.emit("}")
 
