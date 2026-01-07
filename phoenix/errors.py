@@ -1,11 +1,12 @@
 class PhoenixError(Exception):
-    def __init__(self, message, lineno=None, col=None, source=None, filename=None):
+    def __init__(self, message, lineno=None, col=None, source=None, filename=None, hint=None):
         super().__init__(message)
         self.message = message
         self.lineno = lineno
         self.col = col
         self.source = source
         self.filename = filename
+        self.hint = hint
 
     def pretty(self):
         lines = []
@@ -21,5 +22,8 @@ class PhoenixError(Exception):
             lines.append(f"{self.lineno:2} | {self.source.rstrip()}")
             caret_pos = self.col if self.col is not None else 1
             lines.append(f"   | {' ' * (caret_pos - 1)}^")
+
+        if self.hint:
+            lines.append(f"  help: {self.hint}")
 
         return "\n".join(lines)

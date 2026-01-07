@@ -17,7 +17,13 @@ from phoenix.types import (
 )
 
 
-def _error(msg: str, node: ast.AST, filename: str, lines: List[str]) -> PhoenixError:
+def _error(
+    msg: str,
+    node: ast.AST,
+    filename: str,
+    lines: List[str],
+    hint: str | None = None,
+) -> PhoenixError:
     lineno = getattr(node, "lineno", None)
     col = getattr(node, "col_offset", None)
     return PhoenixError(
@@ -26,6 +32,7 @@ def _error(msg: str, node: ast.AST, filename: str, lines: List[str]) -> PhoenixE
         col=col + 1 if col is not None else None,
         source=lines[lineno - 1] if lineno is not None and lineno - 1 < len(lines) else None,
         filename=filename,
+        hint=hint,
     )
 
 
@@ -80,8 +87,8 @@ class TypeInferencer(ast.NodeVisitor):
         return self.ctx
 
     # ---- helpers -------------------------------------------------
-    def error(self, msg: str, node: ast.AST) -> None:
-        raise _error(msg, node, self.filename, self.lines)
+    def error(self, msg: str, node: ast.AST, hint: str | None = None) -> None:
+        raise _error(msg, node, self.filename, self.lines, hint=hint)
 
     def annotate(self, node: ast.AST, t: Type) -> Type:
         self.ctx.node_types[node] = t
@@ -97,7 +104,11 @@ class TypeInferencer(ast.NodeVisitor):
         env = self.env_stack[-1]
         existing = env.get(name)
         if existing and not isinstance(existing, UnknownType) and existing != t:
-            self.error(f"Variable '{name}' changed type ({existing} → {t})", node)
+            self.error(
+                f"Variable '{name}' changed type ({existing} → {t})",
+                node,
+                hint="Keep a single type or use a new variable.",
+            )
         env[name] = t
 
     # ---- visitors ------------------------------------------------
@@ -132,7 +143,11 @@ class TypeInferencer(ast.NodeVisitor):
         value_type = self.infer_expr(node.value)
         if isinstance(target, ast.Name):
             if self.conditional_depth > 0 and target.id not in self.env_stack[-1]:
-                self.error(f"Variable '{target.id}' must exist before conditional assignment", node)
+                self.error(
+                    f"Variable '{target.id}' must exist before conditional assignment",
+                    node,
+                    hint="Initialize the variable before the if/else.",
+                )
             self.bind(target.id, value_type, node)
             self.annotate(target, value_type)
         self.annotate(node, value_type)
@@ -156,39 +171,67 @@ class TypeInferencer(ast.NodeVisitor):
         cond_type = self.infer_expr(node.test)
         if not isinstance(cond_type, BoolType):
             if not (isinstance(cond_type, UnknownType) and self.analysis_pass == "globals_first"):
-                self.error("while condition must be a bool", node.test)
+                self.error(
+                    "while condition must be a bool",
+                    node.test,
+                    hint="Use comparisons/logical ops to produce a boolean.",
+                )
 
         for stmt in node.body:
             self.visit(stmt)
 
     def visit_If(self, node: ast.If) -> None:
         if self.in_if:
-            self.error("Nested if-statements are not supported", node)
+            self.error(
+                "Nested if-statements are not supported",
+                node,
+                hint="Flatten the logic into a single if/else.",
+            )
         if node.orelse and isinstance(node.orelse[0], ast.If):
-            self.error("elif is not supported", node)
+            self.error(
+                "elif is not supported",
+                node,
+                hint="Use a separate if/else or rewrite the condition.",
+            )
 
         cond_type = self.infer_expr(node.test)
         if not isinstance(cond_type, BoolType):
             if isinstance(cond_type, UnknownType) and self.analysis_pass == "globals_first":
                 pass
             else:
-                self.error("if condition must be a bool", node.test)
+                self.error(
+                    "if condition must be a bool",
+                    node.test,
+                    hint="Use comparisons/logical ops to produce a boolean.",
+                )
 
         body_assigned, body_first = self._collect_assignments(node.body)
         else_assigned, else_first = self._collect_assignments(node.orelse)
 
         if not node.orelse and body_assigned:
             first_var = next(iter(body_assigned))
-            self.error(f"Variable '{first_var}' assigned only in one branch", body_first[first_var])
+            self.error(
+                f"Variable '{first_var}' assigned only in one branch",
+                body_first[first_var],
+                hint="Assign the variable before the if or in both branches.",
+            )
 
         missing_in_else = body_assigned - else_assigned
         missing_in_body = else_assigned - body_assigned
         if missing_in_else:
             var = next(iter(missing_in_else))
-            self.error(f"Variable '{var}' assigned only in one branch", body_first[var])
+            self.error(
+                f"Variable '{var}' assigned only in one branch",
+                body_first[var],
+                hint="Assign the variable in both branches.",
+            )
         if missing_in_body:
             var = next(iter(missing_in_body))
-            self.error(f"Variable '{var}' assigned only in one branch", else_first[var])
+            self.error(
+                f"Variable '{var}' assigned only in one branch",
+                else_first[var],
+                hint="Assign the variable in both branches.",
+            )
 
         self.in_if = True
         self.conditional_depth += 1
@@ -236,13 +279,21 @@ class TypeInferencer(ast.NodeVisitor):
             for t in elem_types:
                 if isinstance(t, UnknownType):
                     if not isinstance(element_type, UnknownType):
-                        self.error("List elements must share a single static type", expr)
+                        self.error(
+                            "List elements must share a single static type",
+                            expr,
+                            hint="Use a single element type in each list.",
+                        )
                     continue
                 if isinstance(element_type, UnknownType):
                     element_type = t
                     continue
                 if t != element_type:
-                    self.error("List elements must share a single static type", expr)
+                    self.error(
+                        "List elements must share a single static type",
+                        expr,
+                        hint="Use a single element type in each list.",
+                    )
             return self.annotate(expr, ListType(element_type, length=len(expr.elts)))
 
         if isinstance(expr, ast.Subscript):
@@ -257,26 +308,42 @@ class TypeInferencer(ast.NodeVisitor):
             operand_types = [self.infer_expr(v) for v in expr.values]
             for t in operand_types:
                 if not isinstance(t, BoolType):
-                    self.error("Logical operations require boolean operands", expr)
+                    self.error(
+                        "Logical operations require boolean operands",
+                        expr,
+                        hint="Compare values first, e.g. `x < y`.",
+                    )
             return self.annotate(expr, BoolType())
 
         if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.Not):
             operand_type = self.infer_expr(expr.operand)
             if not isinstance(operand_type, BoolType):
-                self.error("Logical operations require boolean operands", expr)
+                self.error(
+                    "Logical operations require boolean operands",
+                    expr,
+                    hint="Compare values first, e.g. `x < y`.",
+                )
             return self.annotate(expr, BoolType())
 
         if isinstance(expr, ast.Compare):
             allowed_ops = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
             for op in expr.ops:
                 if not isinstance(op, allowed_ops):
-                    self.error("Unsupported comparison operator", expr)
+                    self.error(
+                        "Unsupported comparison operator",
+                        expr,
+                        hint="Use ==, !=, <, <=, >, or >=.",
+                    )
 
             operands = [expr.left] + list(expr.comparators)
             operand_types = [self.infer_expr(o) for o in operands]
             for t in operand_types:
                 if not t.is_numeric():
-                    self.error("Comparisons are only supported for numeric types", expr)
+                    self.error(
+                        "Comparisons are only supported for numeric types",
+                        expr,
+                        hint="Compare ints/floats only.",
+                    )
 
             return self.annotate(expr, BoolType())
 
@@ -331,7 +398,11 @@ class TypeInferencer(ast.NodeVisitor):
         first = self.return_types[0]
         for t in self.return_types[1:]:
             if t != first:
-                self.error("Function returns must be type-stable", node)
+                self.error(
+                    "Function returns must be type-stable",
+                    node,
+                    hint="Make all return paths return the same type.",
+                )
         return first
 
     def _unify_types(self, existing: Type, new: Type) -> Type:

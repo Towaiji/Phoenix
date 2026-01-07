@@ -8,13 +8,20 @@ BANNED_CALLS = {"eval", "exec", "__import__"}
 BANNED_ATTRS = {("importlib", "import_module")}
 
 
-def _error(msg: str, node: ast.AST, filename: str, lines: List[str]) -> PhoenixError:
+def _error(
+    msg: str,
+    node: ast.AST,
+    filename: str,
+    lines: List[str],
+    hint: str | None = None,
+) -> PhoenixError:
     return PhoenixError(
         msg,
         lineno=node.lineno,
         col=node.col_offset + 1,
         source=lines[node.lineno - 1],
         filename=filename,
+        hint=hint,
     )
 
 
@@ -32,6 +39,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
             node,
             filename,
             lines,
+            hint="Assign a literal first (e.g. `n = 10`) and use `range(n)`.",
         )
 
     def _extract_compare(test: ast.AST, node: ast.AST) -> (str, str):
@@ -41,6 +49,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                 node,
                 filename,
                 lines,
+                hint="Use a simple bound like `while i < 10:`.",
             )
 
         op = test.ops[0]
@@ -50,6 +59,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                 node,
                 filename,
                 lines,
+                hint="Use a strict inequality against the literal bound.",
             )
 
         left = test.left
@@ -67,6 +77,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                 node,
                 filename,
                 lines,
+                hint="Make the counter a variable and the bound a literal.",
             )
 
         if isinstance(op, (ast.Lt, ast.LtE)):
@@ -86,6 +97,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                     node,
                     filename,
                     lines,
+                    hint="Use a literal step like `i += 1`.",
                 )
             step = stmt.value.value
             if step == 0:
@@ -94,6 +106,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                     node,
                     filename,
                     lines,
+                    hint="Use a non-zero literal step like `i += 1`.",
                 )
             if isinstance(stmt.op, ast.Add):
                 return step
@@ -104,6 +117,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                 node,
                 filename,
                 lines,
+                hint="Use `i += 1` or `i = i + 1`.",
             )
 
         if isinstance(stmt, ast.Assign):
@@ -129,6 +143,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                         node,
                         filename,
                         lines,
+                        hint="Use a non-zero literal step like `i += 1`.",
                     )
                 if isinstance(binop.op, ast.Add):
                     return step
@@ -139,6 +154,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                 node,
                 filename,
                 lines,
+                hint="Use `i = i + 1` or `i = i - 1`.",
             )
 
         return 0
@@ -162,6 +178,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                     node,
                     filename,
                     lines,
+                    hint="Use `range(...)` or a list with known length.",
                 )
 
             if not (1 <= len(node.iter.args) <= 3):
@@ -170,6 +187,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                     node,
                     filename,
                     lines,
+                    hint="Use `range(stop)`, `range(start, stop)`, or `range(start, stop, step)`.",
                 )
 
             for arg in node.iter.args:
@@ -183,6 +201,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                         node,
                         filename,
                         lines,
+                        hint="Use a positive literal step like `range(0, 10, 1)`.",
                     )
             return
 
@@ -197,6 +216,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
             node,
             filename,
             lines,
+            hint="Use a list literal or a list assigned from a literal.",
         )
 
     def _check_while(node: ast.While, assigned: set) -> None:
@@ -207,6 +227,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                 node,
                 filename,
                 lines,
+                hint="Initialize the counter above the loop, e.g. `i = 0`.",
             )
 
         updates = []
@@ -221,6 +242,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                     node,
                     filename,
                     lines,
+                    hint="Keep a single counter update in the loop body.",
                 )
 
         if len(updates) != 1:
@@ -229,6 +251,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                 node,
                 filename,
                 lines,
+                hint="Add one counter update, no more and no less.",
             )
 
         step = updates[0]
@@ -238,6 +261,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                 node,
                 filename,
                 lines,
+                hint="Use `i += 1` or `i = i + 1`.",
             )
         if direction == "up" and step <= 0:
             raise _error(
@@ -245,6 +269,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                 node,
                 filename,
                 lines,
+                hint="Use `i += 1` when the condition is `i < bound`.",
             )
         if direction == "down" and step >= 0:
             raise _error(
@@ -252,6 +277,7 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                 node,
                 filename,
                 lines,
+                hint="Use `i -= 1` when the condition is `i > bound`.",
             )
 
     def _check_block(stmts: List[ast.stmt], assigned: set, const_ints: dict, list_lengths: dict) -> None:
@@ -329,6 +355,7 @@ def _check_dynamic_features(tree: ast.AST, filename: str, lines: List[str]) -> N
                     node,
                     filename,
                     lines,
+                    hint="Remove dynamic execution and use static code instead.",
                 )
 
             if isinstance(node.func, ast.Attribute):
@@ -341,6 +368,7 @@ def _check_dynamic_features(tree: ast.AST, filename: str, lines: List[str]) -> N
                         node,
                         filename,
                         lines,
+                        hint="Use static imports at the top of the file.",
                     )
 
 
