@@ -22,6 +22,7 @@ class CEmitter:
         self.declared: Set[str] = set()
         self.functions = []
         self.type_ctx = type_ctx
+        self.loop_index = 0
 
     def emit(self, line: str = ""):
         self.lines.append("    " * self.indent + line)
@@ -111,14 +112,69 @@ class CEmitter:
         self.declared = old_declared
 
     def emit_for(self, node):
-        iter_call = node.iter
-        bound = iter_call.args[0].value
-        var = node.target.id
+        if isinstance(node.iter, ast.List):
+            list_type = self._type_of(node.iter)
+            if not isinstance(list_type, ListType) or list_type.length is None:
+                raise Exception("Unsupported for-loop iterable")
+            temp_name = f"__phoenix_list{self.loop_index}"
+            self.loop_index += 1
+            elem_type = c_type_name(list_type.element_type)
+            elems = [self.expr(e) for e in node.iter.elts]
+            size = list_type.length
+            init = ", ".join(elems)
+            self.emit(f"{elem_type} {temp_name}[{size}] = {{{init}}};")
+            list_expr = temp_name
+            idx = f"__phoenix_i{self.loop_index}"
+            self.loop_index += 1
+            var = node.target.id
+            self.emit(f"for (int {idx} = 0; {idx} < {size}; {idx}++) {{")
+            self.indent += 1
+            self.emit(f"{elem_type} {var} = {list_expr}[{idx}];")
+            for stmt in node.body:
+                self.emit_stmt(stmt)
+            self.indent -= 1
+            self.emit("}")
+            return
 
-        c_type = c_type_name(self._type_of(node.target))
-        self.emit(f"for ({c_type} {var} = 0; {var} < {bound}; {var}++) {{")
-        self.emit_block(node.body)
-        self.emit("}")
+        if isinstance(node.iter, ast.Call):
+            iter_call = node.iter
+            args = iter_call.args
+            if len(args) == 1:
+                start = "0"
+                stop = self.expr(args[0])
+                step = "1"
+            elif len(args) == 2:
+                start = self.expr(args[0])
+                stop = self.expr(args[1])
+                step = "1"
+            else:
+                start = self.expr(args[0])
+                stop = self.expr(args[1])
+                step = self.expr(args[2])
+
+            var = node.target.id
+            c_type = c_type_name(self._type_of(node.target))
+            self.emit(f"for ({c_type} {var} = {start}; {var} < {stop}; {var} += {step}) {{")
+            self.emit_block(node.body)
+            self.emit("}")
+            return
+
+        list_expr = self.expr(node.iter)
+        list_type = self._type_of(node.iter)
+        if isinstance(list_type, ListType) and list_type.length is not None:
+            idx = f"__phoenix_i{self.loop_index}"
+            self.loop_index += 1
+            elem_type = c_type_name(list_type.element_type)
+            var = node.target.id
+            self.emit(f"for (int {idx} = 0; {idx} < {list_type.length}; {idx}++) {{")
+            self.indent += 1
+            self.emit(f"{elem_type} {var} = {list_expr}[{idx}];")
+            for stmt in node.body:
+                self.emit_stmt(stmt)
+            self.indent -= 1
+            self.emit("}")
+            return
+        raise Exception("Unsupported for-loop iterable")
 
     def emit_while(self, node: ast.While):
         cond = self.expr(node.test)

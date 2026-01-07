@@ -22,6 +22,18 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
     def _is_int_literal(node: ast.AST) -> bool:
         return isinstance(node, ast.Constant) and isinstance(node.value, int)
 
+    def _range_arg_value(node: ast.AST, const_ints: dict) -> int:
+        if _is_int_literal(node):
+            return node.value
+        if isinstance(node, ast.Name) and node.id in const_ints:
+            return const_ints[node.id]
+        raise _error(
+            "range() bounds must be integer literals or constants.",
+            node,
+            filename,
+            lines,
+        )
+
     def _extract_compare(test: ast.AST, node: ast.AST) -> (str, str):
         if not isinstance(test, ast.Compare) or len(test.ops) != 1 or len(test.comparators) != 1:
             raise _error(
@@ -142,31 +154,50 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                     return True
         return False
 
-    def _check_for(node: ast.For) -> None:
-        if not isinstance(node.iter, ast.Call):
-            raise _error(
-                "For-loop iterable must be a statically known range().",
-                node,
-                filename,
-                lines,
-            )
-
-        if not isinstance(node.iter.func, ast.Name) or node.iter.func.id != "range":
-            raise _error(
-                "For-loops must use range() with static bounds.",
-                node,
-                filename,
-                lines,
-            )
-
-        for arg in node.iter.args:
-            if not _is_int_literal(arg):
+    def _check_for(node: ast.For, const_ints: dict, list_lengths: dict) -> None:
+        if isinstance(node.iter, ast.Call):
+            if not isinstance(node.iter.func, ast.Name) or node.iter.func.id != "range":
                 raise _error(
-                    "range() bounds must be integer literals.",
+                    "For-loops must use range() with static bounds.",
                     node,
                     filename,
                     lines,
                 )
+
+            if not (1 <= len(node.iter.args) <= 3):
+                raise _error(
+                    "range() must have 1 to 3 arguments.",
+                    node,
+                    filename,
+                    lines,
+                )
+
+            for arg in node.iter.args:
+                _range_arg_value(arg, const_ints)
+
+            if len(node.iter.args) == 3:
+                step = _range_arg_value(node.iter.args[2], const_ints)
+                if step <= 0:
+                    raise _error(
+                        "range() step must be a positive integer literal or constant.",
+                        node,
+                        filename,
+                        lines,
+                    )
+            return
+
+        if isinstance(node.iter, ast.List):
+            return
+
+        if isinstance(node.iter, ast.Name) and node.iter.id in list_lengths:
+            return
+
+        raise _error(
+            "For-loop iterable must be range(...) or a list with known length.",
+            node,
+            filename,
+            lines,
+        )
 
     def _check_while(node: ast.While, assigned: set) -> None:
         counter, direction = _extract_compare(node.test, node)
@@ -223,58 +254,69 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                 lines,
             )
 
-    def _collect_assigned(stmts: List[ast.stmt]) -> set:
-        names: set = set()
-        for stmt in stmts:
-            if isinstance(stmt, ast.Assign):
-                for target in stmt.targets:
-                    if isinstance(target, ast.Name):
-                        names.add(target.id)
-            if isinstance(stmt, ast.AugAssign):
-                if isinstance(stmt.target, ast.Name):
-                    names.add(stmt.target.id)
-        return names
-
-    def _check_block(stmts: List[ast.stmt], assigned: set) -> None:
+    def _check_block(stmts: List[ast.stmt], assigned: set, const_ints: dict, list_lengths: dict) -> None:
         for stmt in stmts:
             if isinstance(stmt, ast.FunctionDef):
                 func_assigned = {arg.arg for arg in stmt.args.args}
-                _check_block(stmt.body, func_assigned)
+                _check_block(stmt.body, func_assigned, {}, {})
                 continue
 
             if isinstance(stmt, ast.Assign):
                 for target in stmt.targets:
                     if isinstance(target, ast.Name):
                         assigned.add(target.id)
+                        if _is_int_literal(stmt.value):
+                            const_ints[target.id] = stmt.value.value
+                            list_lengths.pop(target.id, None)
+                        elif isinstance(stmt.value, ast.List):
+                            list_lengths[target.id] = len(stmt.value.elts)
+                            const_ints.pop(target.id, None)
+                        else:
+                            const_ints.pop(target.id, None)
+                            list_lengths.pop(target.id, None)
                 continue
 
             if isinstance(stmt, ast.AugAssign):
                 if isinstance(stmt.target, ast.Name):
                     assigned.add(stmt.target.id)
+                    const_ints.pop(stmt.target.id, None)
+                    list_lengths.pop(stmt.target.id, None)
                 continue
 
             if isinstance(stmt, ast.For):
-                _check_for(stmt)
+                _check_for(stmt, const_ints, list_lengths)
                 if isinstance(stmt.target, ast.Name):
                     assigned.add(stmt.target.id)
-                _check_block(stmt.body, set(assigned))
+                _check_block(stmt.body, set(assigned), dict(const_ints), dict(list_lengths))
                 continue
 
             if isinstance(stmt, ast.While):
                 _check_while(stmt, assigned)
-                _check_block(stmt.body, set(assigned))
+                _check_block(stmt.body, set(assigned), dict(const_ints), dict(list_lengths))
                 continue
 
             if isinstance(stmt, ast.If):
-                _check_block(stmt.body, set(assigned))
-                _check_block(stmt.orelse, set(assigned))
+                body_assigned = set(assigned)
+                else_assigned = set(assigned)
+                body_consts = dict(const_ints)
+                else_consts = dict(const_ints)
+                body_lists = dict(list_lengths)
+                else_lists = dict(list_lengths)
+                _check_block(stmt.body, body_assigned, body_consts, body_lists)
+                _check_block(stmt.orelse, else_assigned, else_consts, else_lists)
                 if stmt.orelse:
-                    body_assigned = _collect_assigned(stmt.body)
-                    else_assigned = _collect_assigned(stmt.orelse)
                     assigned.update(body_assigned & else_assigned)
+                    const_ints.clear()
+                    for name in body_consts:
+                        if name in else_consts and body_consts[name] == else_consts[name]:
+                            const_ints[name] = body_consts[name]
+                    list_lengths.clear()
+                    for name in body_lists:
+                        if name in else_lists and body_lists[name] == else_lists[name]:
+                            list_lengths[name] = body_lists[name]
                 continue
 
-    _check_block(tree.body, set())
+    _check_block(tree.body, set(), {}, {})
 
 
 def _check_dynamic_features(tree: ast.AST, filename: str, lines: List[str]) -> None:

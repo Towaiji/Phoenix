@@ -47,7 +47,7 @@ Phoenix enforces the following at compile time:
 1. Variables may not change type
 2. Lists must contain a single element type
 3. No `eval`, `exec`, reflection, or dynamic imports
-4. `for` uses `range(<int literal>)`; `while` requires a counter compared to an int literal and a monotonic literal step
+4. `for` uses `range(<int literal/const>)` or lists with known length; `while` requires a counter compared to an int literal and a monotonic literal step
 5. Function returns are type-stable
 6. Logical ops (`and`, `or`, `not`) and comparisons (incl. chained) need bool/numeric operands and yield bool
 
@@ -107,7 +107,7 @@ Phoenix achieves **50–100× speedups** on numeric workloads by eliminating dyn
 1. Variables may not change type.
 2. Lists must contain one static element type.
 3. No `eval`, `exec`, reflection, or dynamic imports.
-4. `for` must be `range(<int literal>)`; `while` must use a counter compared to an int literal with a monotonic literal step.
+4. `for` must be `range(<int literal/const>)` or a list with known length; `while` must use a counter compared to an int literal with a monotonic literal step.
 5. Function return type must be consistent.
 6. Logical ops (`and`, `or`, `not`) and comparisons (incl. chained) need bool/numeric operands and return bool.
 7. `if` conditions must be boolean; assignments must exist in both branches (no `elif`/nested `if` yet).
@@ -119,7 +119,7 @@ If any rule is violated, compilation fails with a precise error message.
 ## Supported Constructs (today)
 
 - Types: `int`, `float`, `bool`, `string`, fixed-length homogeneous list literals.
-- Control flow: `for` over `range(<int literal>)`, bounded `while`, `if/else` (no `elif`/nesting), logical `and`/`or`/`not`, comparisons (incl. chained).
+- Control flow: `for` over `range(<int literal/const>)` or known-length lists, bounded `while`, `if/else` (no `elif`/nesting), logical `and`/`or`/`not`, comparisons (incl. chained).
 - Functions: positional parameters with inferred types; returns must be type-stable.
 - Builtins: `print`, `int(...)`, `math.sqrt` (emits `#include <math.h>` as needed).
 - Codegen: C arrays for list literals; `printf` for output; `gcc -O3` compilation.

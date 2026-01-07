@@ -16,6 +16,8 @@ EXPECTED_FAIL = {
     "bad_while_wrong_direction.py",
     "bad_while_other_mutation.py",
     "bad_for_dynamic.py",
+    "bad_for_range_nonliteral.py",
+    "bad_for_iter_unknown_list.py",
     "bad_if_missing_else.py",
     "bad_if_partial_assign.py",
     "bad_if_type.py",

@@ -142,10 +142,13 @@ class TypeInferencer(ast.NodeVisitor):
         self.annotate(node, value_type)
 
     def visit_For(self, node: ast.For) -> None:
-        # range() iterates integers; enforce that here.
+        iter_type = self.infer_expr(node.iter)
+        target_type: Type = IntType()
+        if isinstance(iter_type, ListType):
+            target_type = iter_type.element_type
         if isinstance(node.target, ast.Name):
-            self.bind(node.target.id, IntType(), node)
-            self.annotate(node.target, IntType())
+            self.bind(node.target.id, target_type, node)
+            self.annotate(node.target, target_type)
         for stmt in node.body:
             self.visit(stmt)
 

@@ -1,4 +1,4 @@
-n = 10
-n = n + 1
+n = 2 + 3
+
 for i in range(n):
     print(i)
