@@ -42,6 +42,13 @@ class TypeContext:
     node_types: Dict[ast.AST, Type] = field(default_factory=dict)
     functions: Dict[str, FunctionType] = field(default_factory=dict)
     uses_math: bool = False
+    uses_string: bool = False
+    uses_stdlib: bool = False
+    uses_sum_int: bool = False
+    uses_sum_float: bool = False
+    uses_str_int: bool = False
+    uses_str_float: bool = False
+    uses_str_concat: bool = False
 
 
 class TypeInferencer(ast.NodeVisitor):
@@ -270,6 +277,12 @@ class TypeInferencer(ast.NodeVisitor):
             t = self.lookup(expr.id)
             return self.annotate(expr, t)
 
+        if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, (ast.USub, ast.UAdd)):
+            operand = self.infer_expr(expr.operand)
+            if operand.is_numeric():
+                return self.annotate(expr, operand)
+            return self.annotate(expr, UnknownType())
+
         if isinstance(expr, ast.List):
             if not expr.elts:
                 return self.annotate(expr, ListType(UnknownType(), length=0))
@@ -350,6 +363,9 @@ class TypeInferencer(ast.NodeVisitor):
         if isinstance(expr, ast.BinOp):
             left = self.infer_expr(expr.left)
             right = self.infer_expr(expr.right)
+            if isinstance(expr.op, ast.Add) and isinstance(left, StringType) and isinstance(right, StringType):
+                self.ctx.uses_str_concat = True
+                return self.annotate(expr, StringType())
             if isinstance(left, FloatType) or isinstance(right, FloatType):
                 return self.annotate(expr, FloatType())
             if isinstance(left, IntType) and isinstance(right, IntType):
@@ -370,6 +386,127 @@ class TypeInferencer(ast.NodeVisitor):
         if isinstance(expr.func, ast.Name) and expr.func.id == "int":
             return self.annotate(expr, IntType())
 
+        # abs(x)
+        if isinstance(expr.func, ast.Name) and expr.func.id == "abs":
+            if len(arg_types) != 1 or not arg_types[0].is_numeric():
+                self.error(
+                    "abs() expects a single numeric argument",
+                    expr,
+                    hint="Use abs(<int|float>).",
+                )
+            if isinstance(arg_types[0], FloatType):
+                self.ctx.uses_math = True
+                return self.annotate(expr, FloatType())
+            self.ctx.uses_stdlib = True
+            return self.annotate(expr, IntType())
+
+        # min(a, b) / max(a, b)
+        if isinstance(expr.func, ast.Name) and expr.func.id in {"min", "max"}:
+            if len(arg_types) != 2 or not (arg_types[0].is_numeric() and arg_types[1].is_numeric()):
+                self.error(
+                    f"{expr.func.id}() expects two numeric arguments",
+                    expr,
+                    hint="Use min(a, b) or max(a, b) with numbers.",
+                )
+            return self.annotate(expr, self._unify_types(arg_types[0], arg_types[1]))
+
+        # pow(a, b)
+        if isinstance(expr.func, ast.Name) and expr.func.id == "pow":
+            if len(arg_types) != 2 or not (arg_types[0].is_numeric() and arg_types[1].is_numeric()):
+                self.error(
+                    "pow() expects two numeric arguments",
+                    expr,
+                    hint="Use pow(base, exp) with numbers.",
+                )
+            self.ctx.uses_math = True
+            if isinstance(arg_types[0], FloatType) or isinstance(arg_types[1], FloatType):
+                return self.annotate(expr, FloatType())
+            return self.annotate(expr, IntType())
+
+        # len(x)
+        if isinstance(expr.func, ast.Name) and expr.func.id == "len":
+            if len(arg_types) != 1:
+                self.error(
+                    "len() expects a single argument",
+                    expr,
+                    hint="Use len(list) or len(string).",
+                )
+            arg_t = arg_types[0]
+            if isinstance(arg_t, ListType):
+                if arg_t.length is None:
+                    self.error(
+                        "len() requires a list with known length",
+                        expr,
+                        hint="Use a list literal or assign from a literal first.",
+                    )
+                return self.annotate(expr, IntType())
+            if isinstance(arg_t, StringType):
+                self.ctx.uses_string = True
+                return self.annotate(expr, IntType())
+            self.error(
+                "len() is only supported for lists or strings",
+                expr,
+                hint="Use len(list) or len(\"text\").",
+            )
+
+        # sum(list)
+        if isinstance(expr.func, ast.Name) and expr.func.id == "sum":
+            if len(arg_types) != 1:
+                self.error(
+                    "sum() expects a single list argument",
+                    expr,
+                    hint="Use sum(list_of_numbers).",
+                )
+            if isinstance(expr.args[0], ast.List):
+                self.error(
+                    "sum() does not accept list literals directly",
+                    expr,
+                    hint="Assign the list to a variable first.",
+                )
+            arg_t = arg_types[0]
+            if not isinstance(arg_t, ListType) or not arg_t.element_type.is_numeric():
+                self.error(
+                    "sum() requires a list of numbers",
+                    expr,
+                    hint="Use a list of ints or floats.",
+                )
+            if arg_t.length is None:
+                self.error(
+                    "sum() requires a list with known length",
+                    expr,
+                    hint="Use a list literal or assign from a literal first.",
+                )
+            if isinstance(arg_t.element_type, FloatType):
+                self.ctx.uses_sum_float = True
+                return self.annotate(expr, FloatType())
+            self.ctx.uses_sum_int = True
+            return self.annotate(expr, IntType())
+
+        # str(x)
+        if isinstance(expr.func, ast.Name) and expr.func.id == "str":
+            if len(arg_types) != 1:
+                self.error(
+                    "str() expects a single argument",
+                    expr,
+                    hint="Use str(int|float|bool|string).",
+                )
+            arg_t = arg_types[0]
+            if isinstance(arg_t, StringType):
+                return self.annotate(expr, StringType())
+            if isinstance(arg_t, BoolType):
+                return self.annotate(expr, StringType())
+            if isinstance(arg_t, FloatType):
+                self.ctx.uses_str_float = True
+                return self.annotate(expr, StringType())
+            if isinstance(arg_t, IntType):
+                self.ctx.uses_str_int = True
+                return self.annotate(expr, StringType())
+            self.error(
+                "str() only supports int, float, bool, or string",
+                expr,
+                hint="Use str on basic scalar types.",
+            )
+
         # math.sqrt(x)
         if isinstance(expr.func, ast.Attribute):
             if (
@@ -377,6 +514,19 @@ class TypeInferencer(ast.NodeVisitor):
                 and expr.func.value.id == "math"
                 and expr.func.attr == "sqrt"
             ):
+                self.ctx.uses_math = True
+                return self.annotate(expr, FloatType())
+            if (
+                isinstance(expr.func.value, ast.Name)
+                and expr.func.value.id == "math"
+                and expr.func.attr in {"sin", "cos", "tan", "floor", "ceil"}
+            ):
+                if len(arg_types) != 1 or not arg_types[0].is_numeric():
+                    self.error(
+                        f"math.{expr.func.attr}() expects one numeric argument",
+                        expr,
+                        hint="Use a numeric input for math functions.",
+                    )
                 self.ctx.uses_math = True
                 return self.annotate(expr, FloatType())
 

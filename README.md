@@ -119,9 +119,9 @@ If any rule is violated, compilation fails with a precise error message.
 ## Supported Constructs (today)
 
 - Types: `int`, `float`, `bool`, `string`, fixed-length homogeneous list literals.
-- Control flow: `for` over `range(<int literal/const>)` or known-length lists, bounded `while`, `if/else` (no `elif`/nesting), logical `and`/`or`/`not`, comparisons (incl. chained).
+- Control flow: `for` over `range(<int literal/const>)` or known-length lists, bounded `while`, `if/else` (no `elif`/nesting), logical `and`/`or`/`not`, comparisons (incl. chained), string concatenation via `+`.
 - Functions: positional parameters with inferred types; returns must be type-stable.
-- Builtins: `print`, `int(...)`, `math.sqrt` (emits `#include <math.h>` as needed).
+- Builtins: `print`, `int(...)`, `abs`, `min`, `max`, `pow`, `len`, `sum`, `str`, `math.sqrt`, `math.sin`, `math.cos`, `math.tan`, `math.floor`, `math.ceil`.
 - Codegen: C arrays for list literals; `printf` for output; `gcc -O3` compilation.
 
 ---

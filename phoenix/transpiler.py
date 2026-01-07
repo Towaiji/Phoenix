@@ -27,6 +27,65 @@ class CEmitter:
     def emit(self, line: str = ""):
         self.lines.append("    " * self.indent + line)
 
+    def emit_helpers(self):
+        if self.type_ctx.uses_sum_int:
+            self.emit("int phoenix_sum_int(const int *arr, int len) {")
+            self.indent += 1
+            self.emit("int total = 0;")
+            self.emit("for (int i = 0; i < len; i++) {")
+            self.indent += 1
+            self.emit("total += arr[i];")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("return total;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_sum_float:
+            self.emit("double phoenix_sum_double(const double *arr, int len) {")
+            self.indent += 1
+            self.emit("double total = 0.0;")
+            self.emit("for (int i = 0; i < len; i++) {")
+            self.indent += 1
+            self.emit("total += arr[i];")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("return total;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_str_int:
+            self.emit("const char *phoenix_str_int(int value) {")
+            self.indent += 1
+            self.emit("static char buf[32];")
+            self.emit("snprintf(buf, sizeof(buf), \"%d\", value);")
+            self.emit("return buf;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_str_float:
+            self.emit("const char *phoenix_str_double(double value) {")
+            self.indent += 1
+            self.emit("static char buf[64];")
+            self.emit("snprintf(buf, sizeof(buf), \"%f\", value);")
+            self.emit("return buf;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_str_concat:
+            self.emit("const char *phoenix_str_concat(const char *a, const char *b) {")
+            self.indent += 1
+            self.emit("static char buf[256];")
+            self.emit("snprintf(buf, sizeof(buf), \"%s%s\", a, b);")
+            self.emit("return buf;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
     def emit_block(self, body):
         self.indent += 1
         for stmt in body:
@@ -212,7 +271,7 @@ class CEmitter:
 
         if isinstance(node, ast.Constant):
             if isinstance(node.value, bool):
-                return "true" if node.value else "false"
+                return "1" if node.value else "0"
             if isinstance(node.value, str):
                 return json.dumps(node.value)
             return str(node.value)
@@ -273,6 +332,57 @@ class CEmitter:
                 arg = self.expr(node.args[0])
                 return f"(int)({arg})"
 
+            if isinstance(node.func, ast.Name) and node.func.id == "abs":
+                arg = self.expr(node.args[0])
+                arg_t = self._type_of(node.args[0])
+                if isinstance(arg_t, FloatType):
+                    return f"fabs({arg})"
+                return f"abs({arg})"
+
+            if isinstance(node.func, ast.Name) and node.func.id in {"min", "max"}:
+                left = self.expr(node.args[0])
+                right = self.expr(node.args[1])
+                if node.func.id == "min":
+                    return f"({left} < {right} ? {left} : {right})"
+                return f"({left} > {right} ? {left} : {right})"
+
+            if isinstance(node.func, ast.Name) and node.func.id == "pow":
+                left = self.expr(node.args[0])
+                right = self.expr(node.args[1])
+                result_t = self._type_of(node)
+                if isinstance(result_t, IntType):
+                    return f"(int)pow({left}, {right})"
+                return f"pow({left}, {right})"
+
+            if isinstance(node.func, ast.Name) and node.func.id == "len":
+                arg = node.args[0]
+                arg_t = self._type_of(arg)
+                if isinstance(arg_t, ListType) and arg_t.length is not None:
+                    return str(arg_t.length)
+                if isinstance(arg_t, StringType):
+                    return f"(int)strlen({self.expr(arg)})"
+
+            if isinstance(node.func, ast.Name) and node.func.id == "sum":
+                arg = node.args[0]
+                arg_t = self._type_of(arg)
+                if isinstance(arg_t, ListType) and arg_t.length is not None:
+                    list_expr = self.expr(arg)
+                    if isinstance(arg_t.element_type, FloatType):
+                        return f"phoenix_sum_double({list_expr}, {arg_t.length})"
+                    return f"phoenix_sum_int({list_expr}, {arg_t.length})"
+
+            if isinstance(node.func, ast.Name) and node.func.id == "str":
+                arg = node.args[0]
+                arg_t = self._type_of(arg)
+                if isinstance(arg_t, StringType):
+                    return self.expr(arg)
+                if isinstance(arg_t, BoolType):
+                    return f"({self.expr(arg)} ? \"true\" : \"false\")"
+                if isinstance(arg_t, FloatType):
+                    return f"phoenix_str_double({self.expr(arg)})"
+                if isinstance(arg_t, IntType):
+                    return f"phoenix_str_int({self.expr(arg)})"
+
             if isinstance(node.func, ast.Attribute):
                 if (
                     isinstance(node.func.value, ast.Name)
@@ -281,6 +391,13 @@ class CEmitter:
                 ):
                     arg = self.expr(node.args[0])
                     return f"sqrt({arg})"
+                if (
+                    isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "math"
+                    and node.func.attr in {"sin", "cos", "tan", "floor", "ceil"}
+                ):
+                    arg = self.expr(node.args[0])
+                    return f"{node.func.attr}({arg})"
 
             if isinstance(node.func, ast.Name):
                 func = node.func.id
@@ -293,6 +410,10 @@ class CEmitter:
             left = self.expr(node.left)
             right = self.expr(node.right)
 
+            left_t = self._type_of(node.left)
+            right_t = self._type_of(node.right)
+            if isinstance(node.op, ast.Add) and isinstance(left_t, StringType) and isinstance(right_t, StringType):
+                return f"phoenix_str_concat({left}, {right})"
             if isinstance(node.op, ast.Add):
                 op = "+"
             elif isinstance(node.op, ast.Sub):
@@ -325,10 +446,18 @@ def transpile(tree, type_ctx: TypeContext):
     headers.update(required_headers(_collect_types(type_ctx)))
     if type_ctx.uses_math:
         headers.add("<math.h>")
+    if type_ctx.uses_string:
+        headers.add("<string.h>")
+    if type_ctx.uses_stdlib:
+        headers.add("<stdlib.h>")
+    if type_ctx.uses_str_int or type_ctx.uses_str_float or type_ctx.uses_str_concat:
+        headers.add("<stdio.h>")
 
     for h in sorted(headers):
         emitter.emit(f"#include {h}")
     emitter.emit()
+
+    emitter.emit_helpers()
 
     for stmt in tree.body:
         if isinstance(stmt, ast.FunctionDef):
