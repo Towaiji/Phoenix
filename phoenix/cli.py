@@ -19,11 +19,18 @@ def hash_source(source: str) -> str:
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python3 -m phoenix.cli <file.py>")
+    if len(sys.argv) == 2:
+        mode = "run"
+        filename = sys.argv[1]
+    elif len(sys.argv) == 3 and sys.argv[1] in {"check", "build"}:
+        mode = sys.argv[1]
+        filename = sys.argv[2]
+    else:
+        print("Usage:")
+        print("  python3 -m phoenix.cli <file.py>")
+        print("  python3 -m phoenix.cli check <file.py>")
+        print("  python3 -m phoenix.cli build <file.py>")
         sys.exit(1)
-
-    filename = sys.argv[1]
 
     try:
         # ---- read source ----
@@ -36,7 +43,7 @@ def main():
         cached_bin = CACHE_DIR / f"{src_hash}.bin"
 
         # ---- cache hit ----
-        if cached_bin.exists():
+        if mode == "run" and cached_bin.exists():
             shutil.copyfile(cached_bin, "output")
             print("✓ Using cached binary")
             return
@@ -44,6 +51,10 @@ def main():
         # ---- parse + check ----
         tree = ast.parse(source)
         type_ctx = check_types(tree, filename, lines)
+
+        if mode == "check":
+            print("✓ Phoenix approved. Code is type-stable.")
+            return
 
         # ---- transpile ----
         c_code = transpile(tree, type_ctx)
