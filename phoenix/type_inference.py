@@ -49,6 +49,12 @@ class TypeContext:
     uses_str_int: bool = False
     uses_str_float: bool = False
     uses_str_concat: bool = False
+    uses_bounds_check: bool = False
+    runtime_bounds_checks: set = field(default_factory=set)
+    uses_min_int_list: bool = False
+    uses_max_int_list: bool = False
+    uses_min_float_list: bool = False
+    uses_max_float_list: bool = False
 
 
 class TypeInferencer(ast.NodeVisitor):
@@ -311,6 +317,14 @@ class TypeInferencer(ast.NodeVisitor):
 
         if isinstance(expr, ast.Subscript):
             value_type = self.infer_expr(expr.value)
+            slice_expr = expr.slice.value if isinstance(expr.slice, ast.Index) else expr.slice
+            index_type = self.infer_expr(slice_expr)
+            if not isinstance(index_type, IntType):
+                self.error(
+                    "List index must be an int",
+                    slice_expr,
+                    hint="Use an integer index.",
+                )
             if isinstance(value_type, ListType):
                 result = value_type.element_type
             else:
@@ -366,6 +380,24 @@ class TypeInferencer(ast.NodeVisitor):
             if isinstance(expr.op, ast.Add) and isinstance(left, StringType) and isinstance(right, StringType):
                 self.ctx.uses_str_concat = True
                 return self.annotate(expr, StringType())
+            if isinstance(expr.op, ast.Add) and isinstance(left, StringType) and isinstance(
+                right, (IntType, FloatType)
+            ):
+                if isinstance(right, IntType):
+                    self.ctx.uses_str_int = True
+                else:
+                    self.ctx.uses_str_float = True
+                self.ctx.uses_str_concat = True
+                return self.annotate(expr, StringType())
+            if isinstance(expr.op, ast.Add) and isinstance(right, StringType) and isinstance(
+                left, (IntType, FloatType)
+            ):
+                if isinstance(left, IntType):
+                    self.ctx.uses_str_int = True
+                else:
+                    self.ctx.uses_str_float = True
+                self.ctx.uses_str_concat = True
+                return self.annotate(expr, StringType())
             if isinstance(left, FloatType) or isinstance(right, FloatType):
                 return self.annotate(expr, FloatType())
             if isinstance(left, IntType) and isinstance(right, IntType):
@@ -402,13 +434,50 @@ class TypeInferencer(ast.NodeVisitor):
 
         # min(a, b) / max(a, b)
         if isinstance(expr.func, ast.Name) and expr.func.id in {"min", "max"}:
-            if len(arg_types) != 2 or not (arg_types[0].is_numeric() and arg_types[1].is_numeric()):
-                self.error(
-                    f"{expr.func.id}() expects two numeric arguments",
-                    expr,
-                    hint="Use min(a, b) or max(a, b) with numbers.",
-                )
-            return self.annotate(expr, self._unify_types(arg_types[0], arg_types[1]))
+            if len(arg_types) == 2:
+                if not (arg_types[0].is_numeric() and arg_types[1].is_numeric()):
+                    self.error(
+                        f"{expr.func.id}() expects two numeric arguments",
+                        expr,
+                        hint="Use min(a, b) or max(a, b) with numbers.",
+                    )
+                return self.annotate(expr, self._unify_types(arg_types[0], arg_types[1]))
+            if len(arg_types) == 1 and isinstance(arg_types[0], ListType):
+                list_t = arg_types[0]
+                if list_t.length is None:
+                    self.error(
+                        f"{expr.func.id}() requires a list with known length",
+                        expr,
+                        hint="Use a list literal or assign from a literal first.",
+                    )
+                if list_t.length == 0:
+                    self.error(
+                        f"{expr.func.id}() cannot operate on an empty list",
+                        expr,
+                        hint="Provide at least one element.",
+                    )
+                if not list_t.element_type.is_numeric():
+                    self.error(
+                        f"{expr.func.id}() requires a list of numbers",
+                        expr,
+                        hint="Use a list of ints or floats.",
+                    )
+                if isinstance(list_t.element_type, FloatType):
+                    if expr.func.id == "min":
+                        self.ctx.uses_min_float_list = True
+                    else:
+                        self.ctx.uses_max_float_list = True
+                else:
+                    if expr.func.id == "min":
+                        self.ctx.uses_min_int_list = True
+                    else:
+                        self.ctx.uses_max_int_list = True
+                return self.annotate(expr, list_t.element_type)
+            self.error(
+                f"{expr.func.id}() expects two numbers or one list",
+                expr,
+                hint="Use min(a, b), max(a, b), or min(list)/max(list).",
+            )
 
         # pow(a, b)
         if isinstance(expr.func, ast.Name) and expr.func.id == "pow":
@@ -457,12 +526,6 @@ class TypeInferencer(ast.NodeVisitor):
                     expr,
                     hint="Use sum(list_of_numbers).",
                 )
-            if isinstance(expr.args[0], ast.List):
-                self.error(
-                    "sum() does not accept list literals directly",
-                    expr,
-                    hint="Assign the list to a variable first.",
-                )
             arg_t = arg_types[0]
             if not isinstance(arg_t, ListType) or not arg_t.element_type.is_numeric():
                 self.error(
@@ -480,6 +543,19 @@ class TypeInferencer(ast.NodeVisitor):
                 self.ctx.uses_sum_float = True
                 return self.annotate(expr, FloatType())
             self.ctx.uses_sum_int = True
+            return self.annotate(expr, IntType())
+
+        # round(x)
+        if isinstance(expr.func, ast.Name) and expr.func.id == "round":
+            if len(arg_types) != 1 or not arg_types[0].is_numeric():
+                self.error(
+                    "round() expects a single numeric argument",
+                    expr,
+                    hint="Use round(<int|float>).",
+                )
+            if isinstance(arg_types[0], FloatType):
+                self.ctx.uses_math = True
+                return self.annotate(expr, FloatType())
             return self.annotate(expr, IntType())
 
         # str(x)
@@ -519,7 +595,7 @@ class TypeInferencer(ast.NodeVisitor):
             if (
                 isinstance(expr.func.value, ast.Name)
                 and expr.func.value.id == "math"
-                and expr.func.attr in {"sin", "cos", "tan", "floor", "ceil"}
+                and expr.func.attr in {"sin", "cos", "tan", "floor", "ceil", "log", "exp"}
             ):
                 if len(arg_types) != 1 or not arg_types[0].is_numeric():
                     self.error(

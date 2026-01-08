@@ -56,6 +56,62 @@ class CEmitter:
             self.emit("}")
             self.emit()
 
+        if self.type_ctx.uses_min_int_list:
+            self.emit("int phoenix_min_int_list(const int *arr, int len) {")
+            self.indent += 1
+            self.emit("int minv = arr[0];")
+            self.emit("for (int i = 1; i < len; i++) {")
+            self.indent += 1
+            self.emit("if (arr[i] < minv) minv = arr[i];")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("return minv;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_max_int_list:
+            self.emit("int phoenix_max_int_list(const int *arr, int len) {")
+            self.indent += 1
+            self.emit("int maxv = arr[0];")
+            self.emit("for (int i = 1; i < len; i++) {")
+            self.indent += 1
+            self.emit("if (arr[i] > maxv) maxv = arr[i];")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("return maxv;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_min_float_list:
+            self.emit("double phoenix_min_double_list(const double *arr, int len) {")
+            self.indent += 1
+            self.emit("double minv = arr[0];")
+            self.emit("for (int i = 1; i < len; i++) {")
+            self.indent += 1
+            self.emit("if (arr[i] < minv) minv = arr[i];")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("return minv;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_max_float_list:
+            self.emit("double phoenix_max_double_list(const double *arr, int len) {")
+            self.indent += 1
+            self.emit("double maxv = arr[0];")
+            self.emit("for (int i = 1; i < len; i++) {")
+            self.indent += 1
+            self.emit("if (arr[i] > maxv) maxv = arr[i];")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("return maxv;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
         if self.type_ctx.uses_str_int:
             self.emit("const char *phoenix_str_int(int value) {")
             self.indent += 1
@@ -82,6 +138,20 @@ class CEmitter:
             self.emit("static char buf[256];")
             self.emit("snprintf(buf, sizeof(buf), \"%s%s\", a, b);")
             self.emit("return buf;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_bounds_check:
+            self.emit("int phoenix_bounds_check(int idx, int len) {")
+            self.indent += 1
+            self.emit("if (idx < 0 || idx >= len) {")
+            self.indent += 1
+            self.emit('fprintf(stderr, "PhoenixError: index %d out of bounds for length %d\\n", idx, len);')
+            self.emit("exit(1);")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("return idx;")
             self.indent -= 1
             self.emit("}")
             self.emit()
@@ -213,7 +283,9 @@ class CEmitter:
 
             var = node.target.id
             c_type = c_type_name(self._type_of(node.target))
-            self.emit(f"for ({c_type} {var} = {start}; {var} < {stop}; {var} += {step}) {{")
+            step_sign = getattr(iter_call, "_phoenix_range_step_sign", 1)
+            op = "<" if step_sign > 0 else ">"
+            self.emit(f"for ({c_type} {var} = {start}; {var} {op} {stop}; {var} += {step}) {{")
             self.emit_block(node.body)
             self.emit("}")
             return
@@ -278,7 +350,15 @@ class CEmitter:
 
         if isinstance(node, ast.Subscript):
             arr = self.expr(node.value)
-            idx = self.expr(node.slice)
+            slice_expr = node.slice.value if isinstance(node.slice, ast.Index) else node.slice
+            idx = self.expr(slice_expr)
+            list_type = self._type_of(node.value)
+            if (
+                node in self.type_ctx.runtime_bounds_checks
+                and isinstance(list_type, ListType)
+                and list_type.length is not None
+            ):
+                return f"{arr}[phoenix_bounds_check({idx}, {list_type.length})]"
             return f"{arr}[{idx}]"
 
         if isinstance(node, ast.BoolOp):
@@ -340,11 +420,26 @@ class CEmitter:
                 return f"abs({arg})"
 
             if isinstance(node.func, ast.Name) and node.func.id in {"min", "max"}:
-                left = self.expr(node.args[0])
-                right = self.expr(node.args[1])
-                if node.func.id == "min":
-                    return f"({left} < {right} ? {left} : {right})"
-                return f"({left} > {right} ? {left} : {right})"
+                if len(node.args) == 2:
+                    left = self.expr(node.args[0])
+                    right = self.expr(node.args[1])
+                    if node.func.id == "min":
+                        return f"({left} < {right} ? {left} : {right})"
+                    return f"({left} > {right} ? {left} : {right})"
+                arg = node.args[0]
+                arg_t = self._type_of(arg)
+                if isinstance(arg_t, ListType) and arg_t.length is not None:
+                    if isinstance(arg, ast.List):
+                        elem_c = c_type_name(arg_t.element_type)
+                        elems = ", ".join(self.expr(e) for e in arg.elts)
+                        list_expr = f"({elem_c}[]){{{elems}}}"
+                    else:
+                        list_expr = self.expr(arg)
+                    if isinstance(arg_t.element_type, FloatType):
+                        fn = "phoenix_min_double_list" if node.func.id == "min" else "phoenix_max_double_list"
+                    else:
+                        fn = "phoenix_min_int_list" if node.func.id == "min" else "phoenix_max_int_list"
+                    return f"{fn}({list_expr}, {arg_t.length})"
 
             if isinstance(node.func, ast.Name) and node.func.id == "pow":
                 left = self.expr(node.args[0])
@@ -366,10 +461,22 @@ class CEmitter:
                 arg = node.args[0]
                 arg_t = self._type_of(arg)
                 if isinstance(arg_t, ListType) and arg_t.length is not None:
-                    list_expr = self.expr(arg)
+                    if isinstance(arg, ast.List):
+                        elem_c = c_type_name(arg_t.element_type)
+                        elems = ", ".join(self.expr(e) for e in arg.elts)
+                        list_expr = f"({elem_c}[]){{{elems}}}"
+                    else:
+                        list_expr = self.expr(arg)
                     if isinstance(arg_t.element_type, FloatType):
                         return f"phoenix_sum_double({list_expr}, {arg_t.length})"
                     return f"phoenix_sum_int({list_expr}, {arg_t.length})"
+
+            if isinstance(node.func, ast.Name) and node.func.id == "round":
+                arg = node.args[0]
+                arg_t = self._type_of(arg)
+                if isinstance(arg_t, IntType):
+                    return self.expr(arg)
+                return f"round({self.expr(arg)})"
 
             if isinstance(node.func, ast.Name) and node.func.id == "str":
                 arg = node.args[0]
@@ -394,7 +501,7 @@ class CEmitter:
                 if (
                     isinstance(node.func.value, ast.Name)
                     and node.func.value.id == "math"
-                    and node.func.attr in {"sin", "cos", "tan", "floor", "ceil"}
+                    and node.func.attr in {"sin", "cos", "tan", "floor", "ceil", "log", "exp"}
                 ):
                     arg = self.expr(node.args[0])
                     return f"{node.func.attr}({arg})"
@@ -412,8 +519,21 @@ class CEmitter:
 
             left_t = self._type_of(node.left)
             right_t = self._type_of(node.right)
-            if isinstance(node.op, ast.Add) and isinstance(left_t, StringType) and isinstance(right_t, StringType):
-                return f"phoenix_str_concat({left}, {right})"
+            if isinstance(node.op, ast.Add) and (
+                isinstance(left_t, StringType) or isinstance(right_t, StringType)
+            ):
+                def _as_str(expr: str, t: Type) -> str:
+                    if isinstance(t, StringType):
+                        return expr
+                    if isinstance(t, IntType):
+                        return f"phoenix_str_int({expr})"
+                    if isinstance(t, FloatType):
+                        return f"phoenix_str_double({expr})"
+                    return expr
+
+                left_s = _as_str(left, left_t)
+                right_s = _as_str(right, right_t)
+                return f"phoenix_str_concat({left_s}, {right_s})"
             if isinstance(node.op, ast.Add):
                 op = "+"
             elif isinstance(node.op, ast.Sub):
@@ -452,6 +572,8 @@ def transpile(tree, type_ctx: TypeContext):
         headers.add("<stdlib.h>")
     if type_ctx.uses_str_int or type_ctx.uses_str_float or type_ctx.uses_str_concat:
         headers.add("<stdio.h>")
+    if type_ctx.uses_bounds_check:
+        headers.update({"<stdio.h>", "<stdlib.h>"})
 
     for h in sorted(headers):
         emitter.emit(f"#include {h}")

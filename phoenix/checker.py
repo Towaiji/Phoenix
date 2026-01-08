@@ -3,6 +3,7 @@ from typing import List
 
 from phoenix.errors import PhoenixError
 from phoenix.type_inference import TypeContext, infer_types
+from phoenix.types import IntType, ListType
 
 BANNED_CALLS = {"eval", "exec", "__import__"}
 BANNED_ATTRS = {("importlib", "import_module")}
@@ -32,6 +33,12 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
     def _range_arg_value(node: ast.AST, const_ints: dict) -> int:
         if _is_int_literal(node):
             return node.value
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int):
+                return -node.operand.value
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
+            if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int):
+                return node.operand.value
         if isinstance(node, ast.Name) and node.id in const_ints:
             return const_ints[node.id]
         raise _error(
@@ -195,14 +202,19 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
 
             if len(node.iter.args) == 3:
                 step = _range_arg_value(node.iter.args[2], const_ints)
-                if step <= 0:
-                    raise _error(
-                        "range() step must be a positive integer literal or constant.",
-                        node,
-                        filename,
-                        lines,
-                        hint="Use a positive literal step like `range(0, 10, 1)`.",
-                    )
+            else:
+                step = 1
+
+            if step == 0:
+                raise _error(
+                    "range() step must be a non-zero integer literal or constant.",
+                    node,
+                    filename,
+                    lines,
+                    hint="Use a non-zero literal step like `range(0, 10, 1)`.",
+                )
+
+            node.iter._phoenix_range_step_sign = 1 if step > 0 else -1
             return
 
         if isinstance(node.iter, ast.List):
@@ -376,4 +388,54 @@ def check_types(tree: ast.AST, filename: str, lines: List[str]) -> TypeContext:
     _check_control_flow(tree, filename, lines)
     _check_dynamic_features(tree, filename, lines)
     # Inference enforces type stability and homogeneous aggregates.
-    return infer_types(tree, filename, lines)
+    type_ctx = infer_types(tree, filename, lines)
+    _check_bounds(tree, type_ctx, filename, lines)
+    return type_ctx
+
+
+def _const_int_value(node: ast.AST) -> int | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int):
+            return -node.operand.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
+        if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int):
+            return node.operand.value
+    return None
+
+
+def _check_bounds(
+    tree: ast.AST, type_ctx: TypeContext, filename: str, lines: List[str]
+) -> None:
+    def _slice_expr(node: ast.Subscript) -> ast.AST:
+        return node.slice.value if isinstance(node.slice, ast.Index) else node.slice
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Subscript):
+            continue
+        value_type = type_ctx.node_types.get(node.value)
+        if not isinstance(value_type, ListType):
+            continue
+        if value_type.length is None:
+            raise _error(
+                "List index requires a list with known length.",
+                node,
+                filename,
+                lines,
+                hint="Use a list literal or assign from a literal first.",
+            )
+        idx_node = _slice_expr(node)
+        idx_value = _const_int_value(idx_node)
+        if idx_value is not None:
+            if idx_value < 0 or idx_value >= value_type.length:
+                raise _error(
+                    f"List index {idx_value} is out of bounds for length {value_type.length}.",
+                    node,
+                    filename,
+                    lines,
+                    hint="Use an index within the list bounds.",
+                )
+            continue
+        type_ctx.runtime_bounds_checks.add(node)
+        type_ctx.uses_bounds_check = True

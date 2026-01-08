@@ -1,0 +1,2 @@
+values = []
+print(min(values))

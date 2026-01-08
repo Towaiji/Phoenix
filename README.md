@@ -47,9 +47,10 @@ Phoenix enforces the following at compile time:
 1. Variables may not change type
 2. Lists must contain a single element type
 3. No `eval`, `exec`, reflection, or dynamic imports
-4. `for` uses `range(<int literal/const>)` or lists with known length; `while` requires a counter compared to an int literal and a monotonic literal step
+4. `for` uses `range(<int literal/const>)` or lists with known length (non-zero step); `while` requires a counter compared to an int literal and a monotonic literal step
 5. Function returns are type-stable
 6. Logical ops (`and`, `or`, `not`) and comparisons (incl. chained) need bool/numeric operands and yield bool
+7. List indexing is bounds-checked (static when possible, runtime otherwise)
 
 If any rule is violated, compilation fails with a precise error message.
 
@@ -119,9 +120,9 @@ If any rule is violated, compilation fails with a precise error message.
 ## Supported Constructs (today)
 
 - Types: `int`, `float`, `bool`, `string`, fixed-length homogeneous list literals.
-- Control flow: `for` over `range(<int literal/const>)` or known-length lists, bounded `while`, `if/else` (no `elif`/nesting), logical `and`/`or`/`not`, comparisons (incl. chained), string concatenation via `+`.
+- Control flow: `for` over `range(<int literal/const>)` or known-length lists, bounded `while`, `if/else` (no `elif`/nesting), logical `and`/`or`/`not`, comparisons (incl. chained), string concatenation via `+` (string + string/int/float).
 - Functions: positional parameters with inferred types; returns must be type-stable.
-- Builtins: `print`, `int(...)`, `abs`, `min`, `max`, `pow`, `len`, `sum`, `str`, `math.sqrt`, `math.sin`, `math.cos`, `math.tan`, `math.floor`, `math.ceil`.
+- Builtins: `print`, `int(...)`, `abs`, `min`, `max`, `pow`, `len`, `sum`, `str`, `round`, `math.sqrt`, `math.sin`, `math.cos`, `math.tan`, `math.floor`, `math.ceil`, `math.log`, `math.exp` (min/max also accept numeric lists).
 - Codegen: C arrays for list literals; `printf` for output; `gcc -O3` compilation.
 
 ---
