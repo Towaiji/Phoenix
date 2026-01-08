@@ -111,7 +111,7 @@ Phoenix achieves **50–100× speedups** on numeric workloads by eliminating dyn
 4. `for` must be `range(<int literal/const>)` or a list with known length; `while` must use a counter compared to an int literal with a monotonic literal step.
 5. Function return type must be consistent.
 6. Logical ops (`and`, `or`, `not`) and comparisons (incl. chained) need bool/numeric operands and return bool.
-7. `if` conditions must be boolean; assignments must exist in both branches (no `elif`/nested `if` yet).
+7. `if` conditions must be boolean; assignments must exist in all branches (elif/nested `if` allowed).
 
 If any rule is violated, compilation fails with a precise error message.
 
@@ -120,9 +120,9 @@ If any rule is violated, compilation fails with a precise error message.
 ## Supported Constructs (today)
 
 - Types: `int`, `float`, `bool`, `string`, fixed-length homogeneous list literals.
-- Control flow: `for` over `range(<int literal/const>)` or known-length lists, bounded `while`, `if/else` (no `elif`/nesting), logical `and`/`or`/`not`, comparisons (incl. chained), string concatenation via `+` (string + string/int/float).
+- Control flow: `for` over `range(<int literal/const>)` or known-length lists, bounded `while`, `if`/`elif`/`else` with nesting, logical `and`/`or`/`not`, comparisons (incl. chained), string concatenation via `+` (string + string/int/float).
 - Functions: positional parameters with inferred types; returns must be type-stable.
-- Builtins: `print`, `int(...)`, `abs`, `min`, `max`, `pow`, `len`, `sum`, `str`, `round`, `math.sqrt`, `math.sin`, `math.cos`, `math.tan`, `math.floor`, `math.ceil`, `math.log`, `math.exp` (min/max also accept numeric lists).
+- Builtins: `print`, `int(...)`, `abs`, `min`, `max`, `pow`, `len`, `sum`, `str`, `round`, `math.sqrt`, `math.sin`, `math.cos`, `math.tan`, `math.floor`, `math.ceil`, `math.log`, `math.exp`, `math.log10`, `math.asin`, `math.acos`, `math.atan`, `math.fabs`, `math.pow` (min/max also accept numeric lists; strings support `.upper()`, `.lower()`, `.strip()`).
 - Codegen: C arrays for list literals; `printf` for output; `gcc -O3` compilation.
 
 ---
@@ -143,7 +143,7 @@ Phoenix pipeline:
 
 Phoenix is a minimal prototype focused on safety over breadth:
 
-- Missing: `elif`/nested `if`, dynamic list operations (append/pop/slice), richer string utilities (beyond concat/len/str), dictionaries/sets, classes/objects, and broader stdlib coverage.
+- Missing: dynamic list operations (append/pop/slice), richer string utilities (beyond concat/len/str/upper/lower/strip), dictionaries/sets, classes/objects, and broader stdlib coverage.
 - Codegen is deliberately simple: flat arrays, no heap allocation, minimal header selection.
 
 Future work: expand the safe subset (loop analyses, richer math/stdlib), improve diagnostics and error recovery, add stronger static checks (array bounds proofs, inter-file modules), support module-level constants, and explore a safer memory model for dynamic data while keeping zero-ambiguity guarantees.

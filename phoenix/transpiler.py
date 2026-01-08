@@ -142,6 +142,63 @@ class CEmitter:
             self.emit("}")
             self.emit()
 
+        if self.type_ctx.uses_str_upper:
+            self.emit("const char *phoenix_str_upper(const char *s) {")
+            self.indent += 1
+            self.emit("static char buf[256];")
+            self.emit("int i = 0;")
+            self.emit("for (; s[i] != '\\0' && i < 255; i++) {")
+            self.indent += 1
+            self.emit("buf[i] = (char)toupper((unsigned char)s[i]);")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("buf[i] = '\\0';")
+            self.emit("return buf;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_str_lower:
+            self.emit("const char *phoenix_str_lower(const char *s) {")
+            self.indent += 1
+            self.emit("static char buf[256];")
+            self.emit("int i = 0;")
+            self.emit("for (; s[i] != '\\0' && i < 255; i++) {")
+            self.indent += 1
+            self.emit("buf[i] = (char)tolower((unsigned char)s[i]);")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("buf[i] = '\\0';")
+            self.emit("return buf;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_str_strip:
+            self.emit("const char *phoenix_str_strip(const char *s) {")
+            self.indent += 1
+            self.emit("static char buf[256];")
+            self.emit("const char *start = s;")
+            self.emit("while (*start && isspace((unsigned char)*start)) {")
+            self.indent += 1
+            self.emit("start++;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("const char *end = start + strlen(start);")
+            self.emit("while (end > start && isspace((unsigned char)*(end - 1))) {")
+            self.indent += 1
+            self.emit("end--;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("int len = (int)(end - start);")
+            self.emit("if (len > 255) len = 255;")
+            self.emit("memcpy(buf, start, (size_t)len);")
+            self.emit("buf[len] = '\\0';")
+            self.emit("return buf;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
         if self.type_ctx.uses_bounds_check:
             self.emit("int phoenix_bounds_check(int idx, int len) {")
             self.indent += 1
@@ -501,10 +558,35 @@ class CEmitter:
                 if (
                     isinstance(node.func.value, ast.Name)
                     and node.func.value.id == "math"
-                    and node.func.attr in {"sin", "cos", "tan", "floor", "ceil", "log", "exp"}
+                    and node.func.attr
+                    in {
+                        "sin",
+                        "cos",
+                        "tan",
+                        "floor",
+                        "ceil",
+                        "log",
+                        "exp",
+                        "log10",
+                        "asin",
+                        "acos",
+                        "atan",
+                        "fabs",
+                        "pow",
+                    }
                 ):
                     arg = self.expr(node.args[0])
+                    if node.func.attr == "pow":
+                        right = self.expr(node.args[1])
+                        return f"pow({arg}, {right})"
                     return f"{node.func.attr}({arg})"
+                if node.func.attr in {"upper", "lower", "strip"}:
+                    target = self.expr(node.func.value)
+                    if node.func.attr == "upper":
+                        return f"phoenix_str_upper({target})"
+                    if node.func.attr == "lower":
+                        return f"phoenix_str_lower({target})"
+                    return f"phoenix_str_strip({target})"
 
             if isinstance(node.func, ast.Name):
                 func = node.func.id
@@ -572,6 +654,8 @@ def transpile(tree, type_ctx: TypeContext):
         headers.add("<stdlib.h>")
     if type_ctx.uses_str_int or type_ctx.uses_str_float or type_ctx.uses_str_concat:
         headers.add("<stdio.h>")
+    if type_ctx.uses_str_upper or type_ctx.uses_str_lower or type_ctx.uses_str_strip:
+        headers.update({"<ctype.h>", "<string.h>", "<stdio.h>"})
     if type_ctx.uses_bounds_check:
         headers.update({"<stdio.h>", "<stdlib.h>"})
 

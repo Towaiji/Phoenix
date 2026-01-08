@@ -55,6 +55,9 @@ class TypeContext:
     uses_max_int_list: bool = False
     uses_min_float_list: bool = False
     uses_max_float_list: bool = False
+    uses_str_upper: bool = False
+    uses_str_lower: bool = False
+    uses_str_strip: bool = False
 
 
 class TypeInferencer(ast.NodeVisitor):
@@ -194,64 +197,69 @@ class TypeInferencer(ast.NodeVisitor):
             self.visit(stmt)
 
     def visit_If(self, node: ast.If) -> None:
-        if self.in_if:
-            self.error(
-                "Nested if-statements are not supported",
-                node,
-                hint="Flatten the logic into a single if/else.",
-            )
-        if node.orelse and isinstance(node.orelse[0], ast.If):
-            self.error(
-                "elif is not supported",
-                node,
-                hint="Use a separate if/else or rewrite the condition.",
-            )
+        branches = self._collect_if_branches(node)
+        for test, body in branches:
+            if test is not None:
+                cond_type = self.infer_expr(test)
+                if not isinstance(cond_type, BoolType):
+                    if not (
+                        isinstance(cond_type, UnknownType)
+                        and self.analysis_pass == "globals_first"
+                    ):
+                        self.error(
+                            "if condition must be a bool",
+                            test,
+                            hint="Use comparisons/logical ops to produce a boolean.",
+                        )
 
-        cond_type = self.infer_expr(node.test)
-        if not isinstance(cond_type, BoolType):
-            if isinstance(cond_type, UnknownType) and self.analysis_pass == "globals_first":
-                pass
-            else:
+        assigned_sets = []
+        first_assignments = []
+        has_final_else = branches[-1][0] is None
+        for _test, body in branches:
+            assigned, first = self._collect_assignments(body)
+            assigned_sets.append(assigned)
+            first_assignments.append(first)
+
+        if not has_final_else:
+            combined = set().union(*assigned_sets)
+            if combined:
+                first_var = next(iter(combined))
+                first_node = None
+                for first in first_assignments:
+                    if first_var in first:
+                        first_node = first[first_var]
+                        break
                 self.error(
-                    "if condition must be a bool",
-                    node.test,
-                    hint="Use comparisons/logical ops to produce a boolean.",
+                    f"Variable '{first_var}' assigned only in one branch",
+                    first_node or node,
+                    hint="Assign the variable before the if or in all branches.",
                 )
-
-        body_assigned, body_first = self._collect_assignments(node.body)
-        else_assigned, else_first = self._collect_assignments(node.orelse)
-
-        if not node.orelse and body_assigned:
-            first_var = next(iter(body_assigned))
-            self.error(
-                f"Variable '{first_var}' assigned only in one branch",
-                body_first[first_var],
-                hint="Assign the variable before the if or in both branches.",
-            )
-
-        missing_in_else = body_assigned - else_assigned
-        missing_in_body = else_assigned - body_assigned
-        if missing_in_else:
-            var = next(iter(missing_in_else))
-            self.error(
-                f"Variable '{var}' assigned only in one branch",
-                body_first[var],
-                hint="Assign the variable in both branches.",
-            )
-        if missing_in_body:
-            var = next(iter(missing_in_body))
-            self.error(
-                f"Variable '{var}' assigned only in one branch",
-                else_first[var],
-                hint="Assign the variable in both branches.",
-            )
+        else:
+            base = assigned_sets[0]
+            for idx, branch_set in enumerate(assigned_sets[1:], start=1):
+                if branch_set != base:
+                    missing = base - branch_set
+                    extra = branch_set - base
+                    if missing:
+                        var = next(iter(missing))
+                        self.error(
+                            f"Variable '{var}' assigned only in one branch",
+                            first_assignments[0].get(var, node),
+                            hint="Assign the variable in all branches.",
+                        )
+                    if extra:
+                        var = next(iter(extra))
+                        self.error(
+                            f"Variable '{var}' assigned only in one branch",
+                            first_assignments[idx].get(var, node),
+                            hint="Assign the variable in all branches.",
+                        )
 
         self.in_if = True
         self.conditional_depth += 1
-        for stmt in node.body:
-            self.visit(stmt)
-        for stmt in node.orelse:
-            self.visit(stmt)
+        for _test, body in branches:
+            for stmt in body:
+                self.visit(stmt)
         self.conditional_depth -= 1
         self.in_if = False
 
@@ -595,7 +603,8 @@ class TypeInferencer(ast.NodeVisitor):
             if (
                 isinstance(expr.func.value, ast.Name)
                 and expr.func.value.id == "math"
-                and expr.func.attr in {"sin", "cos", "tan", "floor", "ceil", "log", "exp"}
+                and expr.func.attr
+                in {"sin", "cos", "tan", "floor", "ceil", "log", "exp", "log10", "asin", "acos", "atan"}
             ):
                 if len(arg_types) != 1 or not arg_types[0].is_numeric():
                     self.error(
@@ -605,6 +614,57 @@ class TypeInferencer(ast.NodeVisitor):
                     )
                 self.ctx.uses_math = True
                 return self.annotate(expr, FloatType())
+            if (
+                isinstance(expr.func.value, ast.Name)
+                and expr.func.value.id == "math"
+                and expr.func.attr == "fabs"
+            ):
+                if len(arg_types) != 1 or not arg_types[0].is_numeric():
+                    self.error(
+                        "math.fabs() expects one numeric argument",
+                        expr,
+                        hint="Use a numeric input for math.fabs.",
+                    )
+                self.ctx.uses_math = True
+                return self.annotate(expr, FloatType())
+            if (
+                isinstance(expr.func.value, ast.Name)
+                and expr.func.value.id == "math"
+                and expr.func.attr == "pow"
+            ):
+                if len(arg_types) != 2 or not (arg_types[0].is_numeric() and arg_types[1].is_numeric()):
+                    self.error(
+                        "math.pow() expects two numeric arguments",
+                        expr,
+                        hint="Use math.pow(base, exp) with numbers.",
+                    )
+                self.ctx.uses_math = True
+                if isinstance(arg_types[0], FloatType) or isinstance(arg_types[1], FloatType):
+                    return self.annotate(expr, FloatType())
+                return self.annotate(expr, IntType())
+            if isinstance(expr.func.value, ast.AST):
+                recv_type = self.infer_expr(expr.func.value)
+                if expr.func.attr in {"upper", "lower", "strip"}:
+                    if not isinstance(recv_type, StringType):
+                        self.error(
+                            f"str.{expr.func.attr}() is only valid on strings",
+                            expr,
+                            hint="Call the method on a string value.",
+                        )
+                    if expr.args:
+                        self.error(
+                            f"str.{expr.func.attr}() does not take arguments",
+                            expr,
+                            hint="Call the method without arguments.",
+                        )
+                    if expr.func.attr == "upper":
+                        self.ctx.uses_str_upper = True
+                    elif expr.func.attr == "lower":
+                        self.ctx.uses_str_lower = True
+                    else:
+                        self.ctx.uses_str_strip = True
+                    self.ctx.uses_string = True
+                    return self.annotate(expr, StringType())
 
         # print(...) returns nothing usable
         if isinstance(expr.func, ast.Name) and expr.func.id == "print":
@@ -676,6 +736,21 @@ class TypeInferencer(ast.NodeVisitor):
                         assigned.add(name)
                         first.setdefault(name, node)
         return assigned, first
+
+    def _collect_if_branches(
+        self, node: ast.If
+    ) -> List[tuple[Optional[ast.AST], List[ast.stmt]]]:
+        branches: List[tuple[Optional[ast.AST], List[ast.stmt]]] = []
+        current = node
+        while True:
+            branches.append((current.test, current.body))
+            if current.orelse and len(current.orelse) == 1 and isinstance(current.orelse[0], ast.If):
+                current = current.orelse[0]
+                continue
+            if current.orelse:
+                branches.append((None, current.orelse))
+            break
+        return branches
 
 
 def infer_types(tree: ast.AST, filename: str, lines: List[str]) -> TypeContext:

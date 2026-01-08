@@ -23,6 +23,8 @@ EXPECTED_FAIL = {
     "bad_str_list.py",
     "bad_minmax_empty.py",
     "bad_minmax_list_non_numeric.py",
+    "bad_string_method_args.py",
+    "bad_string_method_receiver.py",
     "bad_index_oob.py",
     "bad_index_negative.py",
     "bad_index_non_int.py",

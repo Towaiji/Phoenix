@@ -6,7 +6,7 @@ Phoenix v0 Rules
 4. `for` must use `range(<int literal>)`; `while` is forbidden.
 5. Function return type must be consistent.
 6. Logical ops (`and`, `or`, `not`) and comparisons (incl. chained) need bool/numeric operands and return bool.
-7. `if` conditions must be bool; every branch assigns the same vars (no nested `if`/`elif`).
+7. `if` conditions must be bool; every branch assigns the same vars (elif/nested `if` allowed).
 
 Phoenix v1 Rules
 
