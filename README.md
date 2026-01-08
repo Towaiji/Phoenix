@@ -143,7 +143,7 @@ Phoenix pipeline:
 
 Phoenix is a minimal prototype focused on safety over breadth:
 
-- Missing: `elif`/nested `if`, dynamic list operations, richer string utilities (beyond concat/len/str), and broader stdlib coverage.
+- Missing: `elif`/nested `if`, dynamic list operations (append/pop/slice), richer string utilities (beyond concat/len/str), dictionaries/sets, classes/objects, and broader stdlib coverage.
 - Codegen is deliberately simple: flat arrays, no heap allocation, minimal header selection.
 
-Future work: expand the safe subset (boolean ops, richer math/stdlib), improve diagnostics, and add stronger static checks (array bounds, inter-file modules) while keeping zero-ambiguity guarantees.
+Future work: expand the safe subset (loop analyses, richer math/stdlib), improve diagnostics and error recovery, add stronger static checks (array bounds proofs, inter-file modules), support module-level constants, and explore a safer memory model for dynamic data while keeping zero-ambiguity guarantees.
