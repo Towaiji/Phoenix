@@ -17,6 +17,16 @@ def c_type_name(t: Type) -> str:
     if isinstance(t, StringType):
         return "const char *"
     if isinstance(t, ListType):
+        if t.length is None:
+            if isinstance(t.element_type, IntType):
+                return "PhoenixListInt"
+            if isinstance(t.element_type, FloatType):
+                return "PhoenixListDouble"
+            if isinstance(t.element_type, BoolType):
+                return "PhoenixListBool"
+            from phoenix.types import StringType  # local import to avoid cycle
+            if isinstance(t.element_type, StringType):
+                return "PhoenixListString"
         return c_type_name(t.element_type)
     # Unknown fallback keeps the C code compilable; checker should guard earlier.
     return "int"

@@ -58,6 +58,11 @@ class TypeContext:
     uses_str_upper: bool = False
     uses_str_lower: bool = False
     uses_str_strip: bool = False
+    dynamic_lists: set = field(default_factory=set)
+    uses_dyn_list_int: bool = False
+    uses_dyn_list_float: bool = False
+    uses_dyn_list_string: bool = False
+    uses_dyn_list_bool: bool = False
 
 
 class TypeInferencer(ast.NodeVisitor):
@@ -77,6 +82,7 @@ class TypeInferencer(ast.NodeVisitor):
 
     def infer(self, tree: ast.AST) -> TypeContext:
         function_defs = [stmt for stmt in tree.body if isinstance(stmt, ast.FunctionDef)]
+        self.ctx.dynamic_lists = self._collect_dynamic_lists(tree)
 
         # Register function stubs so calls can record argument types even before analysis.
         for func in function_defs:
@@ -102,12 +108,29 @@ class TypeInferencer(ast.NodeVisitor):
                 self.visit(stmt)
         return self.ctx
 
+    def _collect_dynamic_lists(self, tree: ast.AST) -> set:
+        names: set = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in {"append", "pop"} and isinstance(node.func.value, ast.Name):
+                    names.add(node.func.value.id)
+        return names
+
     # ---- helpers -------------------------------------------------
     def error(self, msg: str, node: ast.AST, hint: str | None = None) -> None:
         raise _error(msg, node, self.filename, self.lines, hint=hint)
 
     def annotate(self, node: ast.AST, t: Type) -> Type:
         self.ctx.node_types[node] = t
+        if isinstance(t, ListType) and t.length is None:
+            if isinstance(t.element_type, IntType):
+                self.ctx.uses_dyn_list_int = True
+            elif isinstance(t.element_type, FloatType):
+                self.ctx.uses_dyn_list_float = True
+            elif isinstance(t.element_type, StringType):
+                self.ctx.uses_dyn_list_string = True
+            elif isinstance(t.element_type, BoolType):
+                self.ctx.uses_dyn_list_bool = True
         return t
 
     def lookup(self, name: str) -> Type:
@@ -120,6 +143,10 @@ class TypeInferencer(ast.NodeVisitor):
         env = self.env_stack[-1]
         existing = env.get(name)
         if existing and not isinstance(existing, UnknownType) and existing != t:
+            if isinstance(existing, ListType) and isinstance(t, ListType):
+                if isinstance(existing.element_type, UnknownType) and existing.length == t.length:
+                    env[name] = t
+                    return
             self.error(
                 f"Variable '{name}' changed type ({existing} → {t})",
                 node,
@@ -164,6 +191,8 @@ class TypeInferencer(ast.NodeVisitor):
                     node,
                     hint="Initialize the variable before the if/else.",
                 )
+            if isinstance(value_type, ListType) and target.id in self.ctx.dynamic_lists:
+                value_type = ListType(value_type.element_type, length=None)
             self.bind(target.id, value_type, node)
             self.annotate(target, value_type)
         self.annotate(node, value_type)
@@ -326,6 +355,45 @@ class TypeInferencer(ast.NodeVisitor):
         if isinstance(expr, ast.Subscript):
             value_type = self.infer_expr(expr.value)
             slice_expr = expr.slice.value if isinstance(expr.slice, ast.Index) else expr.slice
+            if isinstance(slice_expr, ast.Slice):
+                if not isinstance(expr.value, ast.Name):
+                    self.error(
+                        "List slicing is only supported on list variables",
+                        expr,
+                        hint="Assign the list to a variable before slicing.",
+                    )
+                if slice_expr.step is not None:
+                    self.error(
+                        "List slicing with a step is not supported",
+                        slice_expr,
+                        hint="Use list[start:end] without a step.",
+                    )
+                if slice_expr.lower is not None:
+                    lower_type = self.infer_expr(slice_expr.lower)
+                    if not isinstance(lower_type, IntType):
+                        self.error(
+                            "Slice start must be an int",
+                            slice_expr.lower,
+                            hint="Use an integer start index.",
+                        )
+                if slice_expr.upper is not None:
+                    upper_type = self.infer_expr(slice_expr.upper)
+                    if not isinstance(upper_type, IntType):
+                        self.error(
+                            "Slice end must be an int",
+                            slice_expr.upper,
+                            hint="Use an integer end index.",
+                        )
+                if isinstance(value_type, ListType):
+                    if value_type.length is not None:
+                        self.error(
+                            "List slicing is only supported on dynamic lists",
+                            expr,
+                            hint="Use append/pop before slicing to make the list dynamic.",
+                        )
+                    return self.annotate(expr, ListType(value_type.element_type, length=None))
+                return self.annotate(expr, UnknownType())
+
             index_type = self.infer_expr(slice_expr)
             if not isinstance(index_type, IntType):
                 self.error(
@@ -452,12 +520,6 @@ class TypeInferencer(ast.NodeVisitor):
                 return self.annotate(expr, self._unify_types(arg_types[0], arg_types[1]))
             if len(arg_types) == 1 and isinstance(arg_types[0], ListType):
                 list_t = arg_types[0]
-                if list_t.length is None:
-                    self.error(
-                        f"{expr.func.id}() requires a list with known length",
-                        expr,
-                        hint="Use a list literal or assign from a literal first.",
-                    )
                 if list_t.length == 0:
                     self.error(
                         f"{expr.func.id}() cannot operate on an empty list",
@@ -510,12 +572,6 @@ class TypeInferencer(ast.NodeVisitor):
                 )
             arg_t = arg_types[0]
             if isinstance(arg_t, ListType):
-                if arg_t.length is None:
-                    self.error(
-                        "len() requires a list with known length",
-                        expr,
-                        hint="Use a list literal or assign from a literal first.",
-                    )
                 return self.annotate(expr, IntType())
             if isinstance(arg_t, StringType):
                 self.ctx.uses_string = True
@@ -540,12 +596,6 @@ class TypeInferencer(ast.NodeVisitor):
                     "sum() requires a list of numbers",
                     expr,
                     hint="Use a list of ints or floats.",
-                )
-            if arg_t.length is None:
-                self.error(
-                    "sum() requires a list with known length",
-                    expr,
-                    hint="Use a list literal or assign from a literal first.",
                 )
             if isinstance(arg_t.element_type, FloatType):
                 self.ctx.uses_sum_float = True
@@ -665,6 +715,44 @@ class TypeInferencer(ast.NodeVisitor):
                         self.ctx.uses_str_strip = True
                     self.ctx.uses_string = True
                     return self.annotate(expr, StringType())
+                if expr.func.attr in {"append", "pop"}:
+                    if not isinstance(recv_type, ListType):
+                        self.error(
+                            f"list.{expr.func.attr}() is only valid on lists",
+                            expr,
+                            hint="Call the method on a list value.",
+                        )
+                    if expr.func.attr == "append":
+                        if len(arg_types) != 1:
+                            self.error(
+                                "list.append() expects one argument",
+                                expr,
+                                hint="Use list.append(value).",
+                            )
+                        elem_type = recv_type.element_type
+                        arg_t = arg_types[0]
+                        if isinstance(elem_type, UnknownType):
+                            elem_type = arg_t
+                            if (
+                                isinstance(expr.func.value, ast.Name)
+                                and not isinstance(arg_t, UnknownType)
+                            ):
+                                self.bind(expr.func.value.id, ListType(arg_t, length=None), expr)
+                        if not isinstance(arg_t, UnknownType) and elem_type != arg_t:
+                            self.error(
+                                "list.append() requires a matching element type",
+                                expr,
+                                hint="Append a value with the list's element type.",
+                            )
+                        return self.annotate(expr, UnknownType())
+                    if expr.func.attr == "pop":
+                        if expr.args:
+                            self.error(
+                                "list.pop() does not take arguments",
+                                expr,
+                                hint="Use list.pop() with no arguments.",
+                            )
+                        return self.annotate(expr, recv_type.element_type)
 
         # print(...) returns nothing usable
         if isinstance(expr.func, ast.Name) and expr.func.id == "print":

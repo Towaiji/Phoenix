@@ -24,10 +24,36 @@ class CEmitter:
         self.type_ctx = type_ctx
         self.loop_index = 0
 
+    def _list_suffix(self, t: Type) -> str:
+        if isinstance(t, IntType):
+            return "int"
+        if isinstance(t, FloatType):
+            return "double"
+        if isinstance(t, BoolType):
+            return "bool"
+        if isinstance(t, StringType):
+            return "string"
+        return "int"
+
+    def _list_c_elem(self, t: Type) -> str:
+        if isinstance(t, BoolType):
+            return "bool"
+        if isinstance(t, StringType):
+            return "const char *"
+        return c_type_name(t)
+
     def emit(self, line: str = ""):
         self.lines.append("    " * self.indent + line)
 
     def emit_helpers(self):
+        if self.type_ctx.uses_dyn_list_int:
+            self._emit_dyn_list_helpers("int", "int")
+        if self.type_ctx.uses_dyn_list_float:
+            self._emit_dyn_list_helpers("double", "double")
+        if self.type_ctx.uses_dyn_list_bool:
+            self._emit_dyn_list_helpers("bool", "bool")
+        if self.type_ctx.uses_dyn_list_string:
+            self._emit_dyn_list_helpers("string", "const char *")
         if self.type_ctx.uses_sum_int:
             self.emit("int phoenix_sum_int(const int *arr, int len) {")
             self.indent += 1
@@ -142,6 +168,67 @@ class CEmitter:
             self.emit("}")
             self.emit()
 
+    def _emit_dyn_list_helpers(self, suffix: str, c_elem: str) -> None:
+        struct_name = f"PhoenixList{suffix.capitalize()}"
+        self.emit(f"typedef struct {{")
+        self.indent += 1
+        self.emit("int len;")
+        self.emit("int cap;")
+        self.emit(f"{c_elem} *data;")
+        self.indent -= 1
+        self.emit(f"}} {struct_name};")
+        self.emit()
+
+        self.emit(f"void phoenix_list_{suffix}_append({struct_name} *list, {c_elem} value) {{")
+        self.indent += 1
+        self.emit("if (list->len >= list->cap) {")
+        self.indent += 1
+        self.emit("int new_cap = list->cap ? list->cap * 2 : 4;")
+        self.emit(f"list->data = ({c_elem} *)realloc(list->data, sizeof({c_elem}) * new_cap);")
+        self.emit("list->cap = new_cap;")
+        self.indent -= 1
+        self.emit("}")
+        self.emit("list->data[list->len++] = value;")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
+
+        self.emit(f"{c_elem} phoenix_list_{suffix}_pop({struct_name} *list) {{")
+        self.indent += 1
+        self.emit("if (list->len <= 0) {")
+        self.indent += 1
+        self.emit('fprintf(stderr, "PhoenixError: pop from empty list\\n");')
+        self.emit("exit(1);")
+        self.indent -= 1
+        self.emit("}")
+        self.emit("list->len -= 1;")
+        self.emit("return list->data[list->len];")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
+
+        self.emit(f"{struct_name} phoenix_list_{suffix}_slice({struct_name} *list, int start, int end) {{")
+        self.indent += 1
+        self.emit("if (start < 0 || end < 0 || start > end || end > list->len) {")
+        self.indent += 1
+        self.emit('fprintf(stderr, "PhoenixError: invalid slice bounds\\n");')
+        self.emit("exit(1);")
+        self.indent -= 1
+        self.emit("}")
+        self.emit(f"{struct_name} out;")
+        self.emit("out.len = end - start;")
+        self.emit("out.cap = out.len;")
+        self.emit(f"out.data = ({c_elem} *)malloc(sizeof({c_elem}) * out.cap);")
+        self.emit("for (int i = 0; i < out.len; i++) {")
+        self.indent += 1
+        self.emit("out.data[i] = list->data[start + i];")
+        self.indent -= 1
+        self.emit("}")
+        self.emit("return out;")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
+
         if self.type_ctx.uses_str_upper:
             self.emit("const char *phoenix_str_upper(const char *s) {")
             self.indent += 1
@@ -245,12 +332,26 @@ class CEmitter:
             t = self._type_of(target)
             c_type = c_type_name(t)
 
-            if isinstance(value, ast.List) and isinstance(t, ListType):
+            if isinstance(value, ast.List) and isinstance(t, ListType) and t.length is not None:
                 elems = [self.expr(e) for e in value.elts]
                 size = t.length if t.length is not None else len(elems)
                 init = ", ".join(elems)
                 self.emit(f"{c_type} {name}[{size}] = {{{init}}};")
                 self.declared.add(name)
+                return
+
+            if isinstance(value, ast.List) and isinstance(t, ListType) and t.length is None:
+                elems = [self.expr(e) for e in value.elts]
+                size = len(elems)
+                if is_new:
+                    self.emit(f"{c_type} {name};")
+                    self.declared.add(name)
+                self.emit(f"{name}.len = {size};")
+                self.emit(f"{name}.cap = {size};")
+                elem_c = self._list_c_elem(t.element_type)
+                self.emit(f"{name}.data = ({elem_c} *)malloc(sizeof({elem_c}) * {size});")
+                for idx, elem in enumerate(elems):
+                    self.emit(f"{name}.data[{idx}] = {elem};")
                 return
 
             rhs = self.expr(value)
@@ -393,6 +494,9 @@ class CEmitter:
                 else:
                     fmt = "%d"
                 self.emit(f'printf("{fmt}\\n", {expr});')
+            elif isinstance(call.func, ast.Attribute) and call.func.attr in {"append", "pop"}:
+                expr = self.expr(call)
+                self.emit(f"{expr};")
 
     def expr(self, node):
         if isinstance(node, ast.Name):
@@ -408,8 +512,23 @@ class CEmitter:
         if isinstance(node, ast.Subscript):
             arr = self.expr(node.value)
             slice_expr = node.slice.value if isinstance(node.slice, ast.Index) else node.slice
-            idx = self.expr(slice_expr)
             list_type = self._type_of(node.value)
+            if isinstance(slice_expr, ast.Slice):
+                start = "0" if slice_expr.lower is None else self.expr(slice_expr.lower)
+                end = None
+                if slice_expr.upper is None:
+                    if isinstance(list_type, ListType) and list_type.length is None:
+                        end = f"{arr}.len"
+                    else:
+                        end = "0"
+                else:
+                    end = self.expr(slice_expr.upper)
+                if isinstance(list_type, ListType) and list_type.length is None:
+                    suffix = self._list_suffix(list_type.element_type)
+                    return f"phoenix_list_{suffix}_slice(&{arr}, {start}, {end})"
+            idx = self.expr(slice_expr)
+            if isinstance(list_type, ListType) and list_type.length is None:
+                return f"{arr}.data[phoenix_bounds_check({idx}, {arr}.len)]"
             if (
                 node in self.type_ctx.runtime_bounds_checks
                 and isinstance(list_type, ListType)
@@ -485,18 +604,24 @@ class CEmitter:
                     return f"({left} > {right} ? {left} : {right})"
                 arg = node.args[0]
                 arg_t = self._type_of(arg)
-                if isinstance(arg_t, ListType) and arg_t.length is not None:
+                if isinstance(arg_t, ListType):
                     if isinstance(arg, ast.List):
                         elem_c = c_type_name(arg_t.element_type)
                         elems = ", ".join(self.expr(e) for e in arg.elts)
                         list_expr = f"({elem_c}[]){{{elems}}}"
+                        list_len = str(arg_t.length or len(arg.elts))
                     else:
                         list_expr = self.expr(arg)
+                        list_len = f"{list_expr}.len" if arg_t.length is None else str(arg_t.length)
                     if isinstance(arg_t.element_type, FloatType):
                         fn = "phoenix_min_double_list" if node.func.id == "min" else "phoenix_max_double_list"
                     else:
                         fn = "phoenix_min_int_list" if node.func.id == "min" else "phoenix_max_int_list"
-                    return f"{fn}({list_expr}, {arg_t.length})"
+                    if isinstance(arg, ast.List):
+                        return f"{fn}({list_expr}, {list_len})"
+                    if arg_t.length is None:
+                        return f"{fn}({list_expr}.data, {list_len})"
+                    return f"{fn}({list_expr}, {list_len})"
 
             if isinstance(node.func, ast.Name) and node.func.id == "pow":
                 left = self.expr(node.args[0])
@@ -511,6 +636,8 @@ class CEmitter:
                 arg_t = self._type_of(arg)
                 if isinstance(arg_t, ListType) and arg_t.length is not None:
                     return str(arg_t.length)
+                if isinstance(arg_t, ListType) and arg_t.length is None:
+                    return f"{self.expr(arg)}.len"
                 if isinstance(arg_t, StringType):
                     return f"(int)strlen({self.expr(arg)})"
 
@@ -527,6 +654,11 @@ class CEmitter:
                     if isinstance(arg_t.element_type, FloatType):
                         return f"phoenix_sum_double({list_expr}, {arg_t.length})"
                     return f"phoenix_sum_int({list_expr}, {arg_t.length})"
+                if isinstance(arg_t, ListType) and arg_t.length is None:
+                    list_expr = self.expr(arg)
+                    if isinstance(arg_t.element_type, FloatType):
+                        return f"phoenix_sum_double({list_expr}.data, {list_expr}.len)"
+                    return f"phoenix_sum_int({list_expr}.data, {list_expr}.len)"
 
             if isinstance(node.func, ast.Name) and node.func.id == "round":
                 arg = node.args[0]
@@ -587,6 +719,15 @@ class CEmitter:
                     if node.func.attr == "lower":
                         return f"phoenix_str_lower({target})"
                     return f"phoenix_str_strip({target})"
+                if node.func.attr in {"append", "pop"}:
+                    target = self.expr(node.func.value)
+                    recv_t = self._type_of(node.func.value)
+                    if isinstance(recv_t, ListType) and recv_t.length is None:
+                        suffix = self._list_suffix(recv_t.element_type)
+                        if node.func.attr == "append":
+                            arg = self.expr(node.args[0])
+                            return f"phoenix_list_{suffix}_append(&{target}, {arg})"
+                        return f"phoenix_list_{suffix}_pop(&{target})"
 
             if isinstance(node.func, ast.Name):
                 func = node.func.id
@@ -658,6 +799,13 @@ def transpile(tree, type_ctx: TypeContext):
         headers.update({"<ctype.h>", "<string.h>", "<stdio.h>"})
     if type_ctx.uses_bounds_check:
         headers.update({"<stdio.h>", "<stdlib.h>"})
+    if (
+        type_ctx.uses_dyn_list_int
+        or type_ctx.uses_dyn_list_float
+        or type_ctx.uses_dyn_list_bool
+        or type_ctx.uses_dyn_list_string
+    ):
+        headers.update({"<stdlib.h>", "<stdio.h>"})
 
     for h in sorted(headers):
         emitter.emit(f"#include {h}")

@@ -354,6 +354,11 @@ def _check_control_flow(tree: ast.AST, filename: str, lines: List[str]) -> None:
                             list_lengths[name] = body_lists[name]
                 continue
 
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    if node.func.attr in {"append", "pop"} and isinstance(node.func.value, ast.Name):
+                        list_lengths.pop(node.func.value.id, None)
+
     _check_block(tree.body, set(), {}, {})
 
 
@@ -417,14 +422,22 @@ def _check_bounds(
         value_type = type_ctx.node_types.get(node.value)
         if not isinstance(value_type, ListType):
             continue
+        if isinstance(_slice_expr(node), ast.Slice):
+            continue
         if value_type.length is None:
-            raise _error(
-                "List index requires a list with known length.",
-                node,
-                filename,
-                lines,
-                hint="Use a list literal or assign from a literal first.",
-            )
+            idx_node = _slice_expr(node)
+            idx_value = _const_int_value(idx_node)
+            if idx_value is not None and idx_value < 0:
+                raise _error(
+                    f"List index {idx_value} is out of bounds for dynamic list.",
+                    node,
+                    filename,
+                    lines,
+                    hint="Use a non-negative index.",
+                )
+            type_ctx.runtime_bounds_checks.add(node)
+            type_ctx.uses_bounds_check = True
+            continue
         idx_node = _slice_expr(node)
         idx_value = _const_int_value(idx_node)
         if idx_value is not None:
