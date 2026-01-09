@@ -7,10 +7,12 @@ from typing import Dict, List, Optional
 from phoenix.errors import PhoenixError
 from phoenix.types import (
     BoolType,
+    DictType,
     FloatType,
     FunctionType,
     IntType,
     ListType,
+    SetType,
     StringType,
     Type,
     UnknownType,
@@ -63,6 +65,8 @@ class TypeContext:
     uses_dyn_list_float: bool = False
     uses_dyn_list_string: bool = False
     uses_dyn_list_bool: bool = False
+    dict_types: set = field(default_factory=set)
+    set_types: set = field(default_factory=set)
 
 
 class TypeInferencer(ast.NodeVisitor):
@@ -116,6 +120,11 @@ class TypeInferencer(ast.NodeVisitor):
                     names.add(node.func.value.id)
         return names
 
+    def _normalize_dict_value_type(self, t: Type) -> Type:
+        if isinstance(t, ListType):
+            return ListType(t.element_type, length=None)
+        return t
+
     # ---- helpers -------------------------------------------------
     def error(self, msg: str, node: ast.AST, hint: str | None = None) -> None:
         raise _error(msg, node, self.filename, self.lines, hint=hint)
@@ -131,6 +140,19 @@ class TypeInferencer(ast.NodeVisitor):
                 self.ctx.uses_dyn_list_string = True
             elif isinstance(t.element_type, BoolType):
                 self.ctx.uses_dyn_list_bool = True
+        if isinstance(t, DictType):
+            self.ctx.dict_types.add((t.key_type, t.value_type))
+            if isinstance(t.value_type, ListType) and t.value_type.length is None:
+                if isinstance(t.value_type.element_type, IntType):
+                    self.ctx.uses_dyn_list_int = True
+                elif isinstance(t.value_type.element_type, FloatType):
+                    self.ctx.uses_dyn_list_float = True
+                elif isinstance(t.value_type.element_type, StringType):
+                    self.ctx.uses_dyn_list_string = True
+                elif isinstance(t.value_type.element_type, BoolType):
+                    self.ctx.uses_dyn_list_bool = True
+        if isinstance(t, SetType):
+            self.ctx.set_types.add(t.element_type)
         return t
 
     def lookup(self, name: str) -> Type:
@@ -352,6 +374,63 @@ class TypeInferencer(ast.NodeVisitor):
                     )
             return self.annotate(expr, ListType(element_type, length=len(expr.elts)))
 
+        if isinstance(expr, ast.Dict):
+            if not expr.keys:
+                self.error(
+                    "Dict literals cannot be empty",
+                    expr,
+                    hint="Provide at least one key/value pair.",
+                )
+            key_types = [self.infer_expr(k) for k in expr.keys]
+            value_types = [self.infer_expr(v) for v in expr.values]
+            key_type: Type = key_types[0]
+            value_type: Type = self._normalize_dict_value_type(value_types[0])
+            for t in key_types[1:]:
+                if t != key_type:
+                    self.error(
+                        "Dict keys must share a single static type",
+                        expr,
+                        hint="Use one key type per dict.",
+                    )
+            for t in value_types[1:]:
+                if self._normalize_dict_value_type(t) != value_type:
+                    self.error(
+                        "Dict values must share a single static type",
+                        expr,
+                        hint="Use one value type per dict.",
+                    )
+            if not isinstance(key_type, (IntType, StringType)):
+                self.error(
+                    "Dict keys must be int or string",
+                    expr,
+                    hint="Use int or string keys.",
+                )
+            return self.annotate(expr, DictType(key_type, value_type))
+
+        if isinstance(expr, ast.Set):
+            if not expr.elts:
+                self.error(
+                    "Set literals cannot be empty",
+                    expr,
+                    hint="Provide at least one element.",
+                )
+            elem_types = [self.infer_expr(e) for e in expr.elts]
+            element_type: Type = elem_types[0]
+            for t in elem_types[1:]:
+                if t != element_type:
+                    self.error(
+                        "Set elements must share a single static type",
+                        expr,
+                        hint="Use one element type per set.",
+                    )
+            if not isinstance(element_type, (IntType, StringType)):
+                self.error(
+                    "Set elements must be int or string",
+                    expr,
+                    hint="Use int or string elements.",
+                )
+            return self.annotate(expr, SetType(element_type))
+
         if isinstance(expr, ast.Subscript):
             value_type = self.infer_expr(expr.value)
             slice_expr = expr.slice.value if isinstance(expr.slice, ast.Index) else expr.slice
@@ -394,6 +473,14 @@ class TypeInferencer(ast.NodeVisitor):
                     return self.annotate(expr, ListType(value_type.element_type, length=None))
                 return self.annotate(expr, UnknownType())
 
+            if isinstance(value_type, DictType):
+                if isinstance(expr.value, ast.Dict):
+                    self.error(
+                        "Dict literals must be assigned to a variable before lookup",
+                        expr.value,
+                        hint="Assign the dict to a variable first.",
+                    )
+                return self.annotate(expr, value_type.value_type)
             index_type = self.infer_expr(slice_expr)
             if not isinstance(index_type, IntType):
                 self.error(
@@ -430,6 +517,28 @@ class TypeInferencer(ast.NodeVisitor):
 
         if isinstance(expr, ast.Compare):
             allowed_ops = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
+            if len(expr.ops) == 1 and isinstance(expr.ops[0], (ast.In, ast.NotIn)):
+                left_type = self.infer_expr(expr.left)
+                right_type = self.infer_expr(expr.comparators[0])
+                if not isinstance(right_type, SetType):
+                    self.error(
+                        "Membership tests require a set",
+                        expr,
+                        hint="Use `x in set` with a set on the right.",
+                    )
+                if isinstance(expr.comparators[0], ast.Set):
+                    self.error(
+                        "Set literals must be assigned to a variable before membership tests",
+                        expr.comparators[0],
+                        hint="Assign the set to a variable first.",
+                    )
+                if left_type != right_type.element_type:
+                    self.error(
+                        "Set membership types must match",
+                        expr,
+                        hint="Ensure the element type matches the set.",
+                    )
+                return self.annotate(expr, BoolType())
             for op in expr.ops:
                 if not isinstance(op, allowed_ops):
                     self.error(

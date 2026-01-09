@@ -55,6 +55,19 @@ class ListType(Type):
 
 
 @dataclass(frozen=True)
+class DictType(Type):
+    key_type: Type
+    value_type: Type
+    name: str = "dict"
+
+
+@dataclass(frozen=True)
+class SetType(Type):
+    element_type: Type
+    name: str = "set"
+
+
+@dataclass(frozen=True)
 class FunctionType(Type):
     param_types: Tuple[Type, ...]
     return_type: Type

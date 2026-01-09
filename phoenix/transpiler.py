@@ -9,6 +9,8 @@ from phoenix.types import (
     FloatType,
     IntType,
     ListType,
+    DictType,
+    SetType,
     StringType,
     Type,
     UnknownType,
@@ -31,6 +33,42 @@ class CEmitter:
             return "double"
         if isinstance(t, BoolType):
             return "bool"
+        if isinstance(t, StringType):
+            return "string"
+        return "int"
+
+    def _dict_key_suffix(self, t: Type) -> str:
+        if isinstance(t, IntType):
+            return "int"
+        if isinstance(t, StringType):
+            return "string"
+        return "int"
+
+    def _dict_val_suffix(self, t: Type) -> str:
+        if isinstance(t, IntType):
+            return "int"
+        if isinstance(t, FloatType):
+            return "double"
+        if isinstance(t, BoolType):
+            return "bool"
+        if isinstance(t, StringType):
+            return "string"
+        if isinstance(t, ListType):
+            return f"list_{self._list_suffix(t.element_type)}"
+        return "int"
+
+    def _dict_c_val(self, t: Type) -> str:
+        if isinstance(t, StringType):
+            return "const char *"
+        if isinstance(t, BoolType):
+            return "bool"
+        if isinstance(t, ListType):
+            return c_type_name(t)
+        return c_type_name(t)
+
+    def _set_elem_suffix(self, t: Type) -> str:
+        if isinstance(t, IntType):
+            return "int"
         if isinstance(t, StringType):
             return "string"
         return "int"
@@ -168,6 +206,38 @@ class CEmitter:
             self.emit("}")
             self.emit()
 
+        if self.type_ctx.uses_str_upper:
+            self.emit("const char *phoenix_str_upper(const char *s) {")
+            self.indent += 1
+            self.emit("static char buf[256];")
+            self.emit("int i = 0;")
+            self.emit("for (; s[i] != '\\0' && i < 255; i++) {")
+            self.indent += 1
+            self.emit("buf[i] = (char)toupper((unsigned char)s[i]);")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("buf[i] = '\\0';")
+            self.emit("return buf;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_str_lower:
+            self.emit("const char *phoenix_str_lower(const char *s) {")
+            self.indent += 1
+            self.emit("static char buf[256];")
+            self.emit("int i = 0;")
+            self.emit("for (; s[i] != '\\0' && i < 255; i++) {")
+            self.indent += 1
+            self.emit("buf[i] = (char)tolower((unsigned char)s[i]);")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("buf[i] = '\\0';")
+            self.emit("return buf;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
     def _emit_dyn_list_helpers(self, suffix: str, c_elem: str) -> None:
         struct_name = f"PhoenixList{suffix.capitalize()}"
         self.emit(f"typedef struct {{")
@@ -300,6 +370,80 @@ class CEmitter:
             self.emit("}")
             self.emit()
 
+        for key_t, val_t in sorted(self.type_ctx.dict_types, key=lambda x: (repr(x[0]), repr(x[1]))):
+            self._emit_dict_helpers(key_t, val_t)
+
+        for elem_t in sorted(self.type_ctx.set_types, key=lambda x: repr(x)):
+            self._emit_set_helpers(elem_t)
+
+    def _emit_dict_helpers(self, key_t: Type, val_t: Type) -> None:
+        key_suffix = self._dict_key_suffix(key_t)
+        val_suffix = self._dict_val_suffix(val_t)
+        key_c = "int" if isinstance(key_t, IntType) else "const char *"
+        val_c = self._dict_c_val(val_t)
+        struct_name = c_type_name(DictType(key_t, val_t))
+        self.emit(f"typedef struct {{")
+        self.indent += 1
+        self.emit("int len;")
+        self.emit(f"{key_c} *keys;")
+        self.emit(f"{val_c} *values;")
+        self.indent -= 1
+        self.emit(f"}} {struct_name};")
+        self.emit()
+
+        func_name = f"phoenix_dict_{key_suffix}_{val_suffix}_get"
+        self.emit(f"{val_c} {func_name}({struct_name} *dict, {key_c} key) {{")
+        self.indent += 1
+        self.emit("for (int i = 0; i < dict->len; i++) {")
+        self.indent += 1
+        if isinstance(key_t, StringType):
+            self.emit("if (strcmp(dict->keys[i], key) == 0) {")
+        else:
+            self.emit("if (dict->keys[i] == key) {")
+        self.indent += 1
+        self.emit("return dict->values[i];")
+        self.indent -= 1
+        self.emit("}")
+        self.indent -= 1
+        self.emit("}")
+        self.emit('fprintf(stderr, "PhoenixError: key not found in dict\\n");')
+        self.emit("exit(1);")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
+
+    def _emit_set_helpers(self, elem_t: Type) -> None:
+        elem_suffix = self._set_elem_suffix(elem_t)
+        elem_c = "int" if isinstance(elem_t, IntType) else "const char *"
+        struct_name = c_type_name(SetType(elem_t))
+        self.emit("typedef struct {")
+        self.indent += 1
+        self.emit("int len;")
+        self.emit(f"{elem_c} *data;")
+        self.indent -= 1
+        self.emit(f"}} {struct_name};")
+        self.emit()
+
+        func_name = f"phoenix_set_{elem_suffix}_contains"
+        self.emit(f"bool {func_name}({struct_name} *set, {elem_c} value) {{")
+        self.indent += 1
+        self.emit("for (int i = 0; i < set->len; i++) {")
+        self.indent += 1
+        if isinstance(elem_t, StringType):
+            self.emit("if (strcmp(set->data[i], value) == 0) {")
+        else:
+            self.emit("if (set->data[i] == value) {")
+        self.indent += 1
+        self.emit("return true;")
+        self.indent -= 1
+        self.emit("}")
+        self.indent -= 1
+        self.emit("}")
+        self.emit("return false;")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
+
     def emit_block(self, body):
         self.indent += 1
         for stmt in body:
@@ -354,6 +498,14 @@ class CEmitter:
                     self.emit(f"{name}.data[{idx}] = {elem};")
                 return
 
+            if isinstance(value, ast.Dict) and isinstance(t, DictType):
+                self.emit_dict_assign(name, value, t, is_new)
+                return
+
+            if isinstance(value, ast.Set) and isinstance(t, SetType):
+                self.emit_set_assign(name, value, t, is_new)
+                return
+
             rhs = self.expr(value)
             if is_new:
                 self.emit(f"{c_type} {name} = {rhs};")
@@ -397,6 +549,53 @@ class CEmitter:
         self.emit("}")
         self.emit()
         self.declared = old_declared
+
+    def emit_dict_assign(self, name: str, value: ast.Dict, t: DictType, is_new: bool) -> None:
+        key_t = t.key_type
+        val_t = t.value_type
+        key_c = "int" if isinstance(key_t, IntType) else "const char *"
+        val_c = self._dict_c_val(val_t)
+        size = len(value.keys)
+        if is_new:
+            self.emit(f"{c_type_name(t)} {name};")
+            self.declared.add(name)
+        self.emit(f"{name}.len = {size};")
+        self.emit(f"{name}.keys = ({key_c} *)malloc(sizeof({key_c}) * {size});")
+        self.emit(f"{name}.values = ({val_c} *)malloc(sizeof({val_c}) * {size});")
+
+        for idx, (k, v) in enumerate(zip(value.keys, value.values)):
+            key_expr = self.expr(k)
+            self.emit(f"{name}.keys[{idx}] = {key_expr};")
+            if isinstance(val_t, ListType) and val_t.length is None and isinstance(v, ast.List):
+                temp_name = f"__phoenix_dict_list{idx}_{name}"
+                self._emit_dyn_list_literal(temp_name, val_t.element_type, v.elts)
+                self.emit(f"{name}.values[{idx}] = {temp_name};")
+            else:
+                val_expr = self.expr(v)
+                self.emit(f"{name}.values[{idx}] = {val_expr};")
+
+    def emit_set_assign(self, name: str, value: ast.Set, t: SetType, is_new: bool) -> None:
+        elem_t = t.element_type
+        elem_c = "int" if isinstance(elem_t, IntType) else "const char *"
+        size = len(value.elts)
+        if is_new:
+            self.emit(f"{c_type_name(t)} {name};")
+            self.declared.add(name)
+        self.emit(f"{name}.len = {size};")
+        self.emit(f"{name}.data = ({elem_c} *)malloc(sizeof({elem_c}) * {size});")
+        for idx, e in enumerate(value.elts):
+            elem_expr = self.expr(e)
+            self.emit(f"{name}.data[{idx}] = {elem_expr};")
+
+    def _emit_dyn_list_literal(self, name: str, elem_t: Type, elems: List[ast.AST]) -> None:
+        elem_c = self._list_c_elem(elem_t)
+        size = len(elems)
+        self.emit(f"{c_type_name(ListType(elem_t, length=None))} {name};")
+        self.emit(f"{name}.len = {size};")
+        self.emit(f"{name}.cap = {size};")
+        self.emit(f"{name}.data = ({elem_c} *)malloc(sizeof({elem_c}) * {size});")
+        for idx, elem in enumerate(elems):
+            self.emit(f"{name}.data[{idx}] = {self.expr(elem)};")
 
     def emit_for(self, node):
         if isinstance(node.iter, ast.List):
@@ -509,6 +708,9 @@ class CEmitter:
                 return json.dumps(node.value)
             return str(node.value)
 
+        if isinstance(node, (ast.Dict, ast.Set)):
+            raise Exception("Dict/set literals must be assigned to a variable first")
+
         if isinstance(node, ast.Subscript):
             arr = self.expr(node.value)
             slice_expr = node.slice.value if isinstance(node.slice, ast.Index) else node.slice
@@ -526,6 +728,13 @@ class CEmitter:
                 if isinstance(list_type, ListType) and list_type.length is None:
                     suffix = self._list_suffix(list_type.element_type)
                     return f"phoenix_list_{suffix}_slice(&{arr}, {start}, {end})"
+            if isinstance(list_type, DictType):
+                key_t = list_type.key_type
+                val_t = list_type.value_type
+                key_suffix = self._dict_key_suffix(key_t)
+                val_suffix = self._dict_val_suffix(val_t)
+                key_expr = self.expr(slice_expr)
+                return f"phoenix_dict_{key_suffix}_{val_suffix}_get(&{arr}, {key_expr})"
             idx = self.expr(slice_expr)
             if isinstance(list_type, ListType) and list_type.length is None:
                 return f"{arr}.data[phoenix_bounds_check({idx}, {arr}.len)]"
@@ -555,6 +764,16 @@ class CEmitter:
             return f"!({operand})"
 
         if isinstance(node, ast.Compare):
+            if len(node.ops) == 1 and isinstance(node.ops[0], (ast.In, ast.NotIn)):
+                right_t = self._type_of(node.comparators[0])
+                if isinstance(right_t, SetType):
+                    elem_suffix = self._set_elem_suffix(right_t.element_type)
+                    left = self.expr(node.left)
+                    right = self.expr(node.comparators[0])
+                    expr = f"phoenix_set_{elem_suffix}_contains(&{right}, {left})"
+                    if isinstance(node.ops[0], ast.NotIn):
+                        return f"!({expr})"
+                    return expr
             left = self.expr(node.left)
             comparator_exprs = [self.expr(c) for c in node.comparators]
             comparisons: List[str] = []
@@ -806,6 +1025,8 @@ def transpile(tree, type_ctx: TypeContext):
         or type_ctx.uses_dyn_list_string
     ):
         headers.update({"<stdlib.h>", "<stdio.h>"})
+    if type_ctx.dict_types or type_ctx.set_types:
+        headers.update({"<stdlib.h>", "<stdio.h>", "<string.h>", "<stdbool.h>"})
 
     for h in sorted(headers):
         emitter.emit(f"#include {h}")
