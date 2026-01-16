@@ -25,16 +25,20 @@ def _error(
     filename: str,
     lines: List[str],
     hint: str | None = None,
+    rule_id: str | None = None,
 ) -> PhoenixError:
     lineno = getattr(node, "lineno", None)
     col = getattr(node, "col_offset", None)
+    node_filename = getattr(node, "phoenix_filename", filename)
+    node_lines = getattr(node, "phoenix_lines", lines)
     return PhoenixError(
         msg,
         lineno=lineno,
         col=col + 1 if col is not None else None,
-        source=lines[lineno - 1] if lineno is not None and lineno - 1 < len(lines) else None,
-        filename=filename,
+        source=node_lines[lineno - 1] if lineno is not None and lineno - 1 < len(node_lines) else None,
+        filename=node_filename,
         hint=hint,
+        rule_id=rule_id,
     )
 
 
@@ -60,13 +64,20 @@ class TypeContext:
     uses_str_upper: bool = False
     uses_str_lower: bool = False
     uses_str_strip: bool = False
+    uses_str_startswith: bool = False
+    uses_str_endswith: bool = False
+    uses_str_find: bool = False
+    uses_str_replace: bool = False
     dynamic_lists: set = field(default_factory=set)
+    dynamic_list_vars: set = field(default_factory=set)
     uses_dyn_list_int: bool = False
     uses_dyn_list_float: bool = False
     uses_dyn_list_string: bool = False
     uses_dyn_list_bool: bool = False
     dict_types: set = field(default_factory=set)
     set_types: set = field(default_factory=set)
+    dict_vars: set = field(default_factory=set)
+    set_vars: set = field(default_factory=set)
 
 
 class TypeInferencer(ast.NodeVisitor):
@@ -83,6 +94,7 @@ class TypeInferencer(ast.NodeVisitor):
         self.conditional_depth: int = 0
         self.branch_assignments: Dict[str, ast.AST] = {}
         self.analysis_pass: str = "init"
+        self.errors: List[PhoenixError] = []
 
     def infer(self, tree: ast.AST) -> TypeContext:
         function_defs = [stmt for stmt in tree.body if isinstance(stmt, ast.FunctionDef)]
@@ -98,18 +110,27 @@ class TypeInferencer(ast.NodeVisitor):
         self.analysis_pass = "globals_first"
         for stmt in tree.body:
             if not isinstance(stmt, ast.FunctionDef):
-                self.visit(stmt)
+                try:
+                    self.visit(stmt)
+                except PhoenixError as exc:
+                    self.errors.append(exc)
 
         # Second pass: analyze functions with any recorded parameter hints.
         self.analysis_pass = "functions"
         for func in function_defs:
-            self.visit(func)
+            try:
+                self.visit(func)
+            except PhoenixError as exc:
+                self.errors.append(exc)
 
         # Third pass: refresh globals now that function return types are known.
         self.analysis_pass = "globals_final"
         for stmt in tree.body:
             if not isinstance(stmt, ast.FunctionDef):
-                self.visit(stmt)
+                try:
+                    self.visit(stmt)
+                except PhoenixError as exc:
+                    self.errors.append(exc)
         return self.ctx
 
     def _collect_dynamic_lists(self, tree: ast.AST) -> set:
@@ -175,6 +196,13 @@ class TypeInferencer(ast.NodeVisitor):
                 hint="Keep a single type or use a new variable.",
             )
         env[name] = t
+        if len(self.env_stack) == 1:
+            if isinstance(t, ListType) and t.length is None:
+                self.ctx.dynamic_list_vars.add(name)
+            if isinstance(t, DictType):
+                self.ctx.dict_vars.add(name)
+            if isinstance(t, SetType):
+                self.ctx.set_vars.add(name)
 
     # ---- visitors ------------------------------------------------
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -217,11 +245,85 @@ class TypeInferencer(ast.NodeVisitor):
                 value_type = ListType(value_type.element_type, length=None)
             self.bind(target.id, value_type, node)
             self.annotate(target, value_type)
+        elif isinstance(target, ast.Subscript):
+            container_t = self.infer_expr(target.value)
+            if isinstance(container_t, DictType):
+                key_expr = target.slice.value if isinstance(target.slice, ast.Index) else target.slice
+                key_t = self.infer_expr(key_expr)
+                if key_t != container_t.key_type:
+                    self.error(
+                        "Dict assignment key type must match dict key type",
+                        key_expr,
+                        hint="Use a key of the dict's declared type.",
+                    )
+                value_t = self._normalize_dict_value_type(value_type)
+                if value_t != container_t.value_type:
+                    self.error(
+                        "Dict assignment value type must match dict value type",
+                        node.value,
+                        hint="Use a value of the dict's declared type.",
+                    )
+            elif isinstance(container_t, ListType):
+                index_expr = target.slice.value if isinstance(target.slice, ast.Index) else target.slice
+                index_t = self.infer_expr(index_expr)
+                if not isinstance(index_t, IntType):
+                    self.error(
+                        "List index must be an int",
+                        index_expr,
+                        hint="Use an integer index.",
+                    )
+                elem_t = container_t.element_type
+                if isinstance(elem_t, UnknownType) and not isinstance(value_type, UnknownType):
+                    if isinstance(target.value, ast.Name):
+                        refined = ListType(value_type, length=container_t.length)
+                        self.bind(target.value.id, refined, node)
+                        elem_t = value_type
+                if (
+                    not isinstance(value_type, UnknownType)
+                    and not isinstance(elem_t, UnknownType)
+                    and value_type != elem_t
+                ):
+                    self.error(
+                        "List assignment value type must match list element type",
+                        node.value,
+                        hint="Assign a value with the list's element type.",
+                    )
+            else:
+                self.error(
+                    "Only lists and dicts support item assignment",
+                    target,
+                    hint="Assign to list indices or dict keys.",
+                )
         self.annotate(node, value_type)
 
     def visit_Expr(self, node: ast.Expr) -> None:
         value_type = self.infer_expr(node.value)
         self.annotate(node, value_type)
+
+    def visit_Delete(self, node: ast.Delete) -> None:
+        for target in node.targets:
+            if isinstance(target, ast.Subscript):
+                container_t = self.infer_expr(target.value)
+                if not isinstance(container_t, DictType):
+                    self.error(
+                        "Only dicts support delete operations",
+                        target,
+                        hint="Use `del dict[key]`.",
+                    )
+                key_expr = target.slice.value if isinstance(target.slice, ast.Index) else target.slice
+                key_t = self.infer_expr(key_expr)
+                if key_t != container_t.key_type:
+                    self.error(
+                        "Dict delete key type must match dict key type",
+                        key_expr,
+                        hint="Use a key of the dict's declared type.",
+                    )
+                continue
+            self.error(
+                "Delete is only supported for dict keys",
+                target,
+                hint="Use `del dict[key]`.",
+            )
 
     def visit_For(self, node: ast.For) -> None:
         iter_type = self.infer_expr(node.iter)
@@ -326,6 +428,13 @@ class TypeInferencer(ast.NodeVisitor):
 
     # ---- expression inference -----------------------------------
     def infer_expr(self, expr: ast.AST) -> Type:
+        try:
+            return self._infer_expr_inner(expr)
+        except PhoenixError as exc:
+            self.errors.append(exc)
+            return self.annotate(expr, UnknownType())
+
+    def _infer_expr_inner(self, expr: ast.AST) -> Type:
         if isinstance(expr, ast.Constant):
             value = expr.value
             if isinstance(value, bool):
@@ -803,27 +912,58 @@ class TypeInferencer(ast.NodeVisitor):
                 return self.annotate(expr, IntType())
             if isinstance(expr.func.value, ast.AST):
                 recv_type = self.infer_expr(expr.func.value)
-                if expr.func.attr in {"upper", "lower", "strip"}:
+                if expr.func.attr in {"upper", "lower", "strip", "startswith", "endswith", "find", "replace"}:
                     if not isinstance(recv_type, StringType):
                         self.error(
                             f"str.{expr.func.attr}() is only valid on strings",
                             expr,
                             hint="Call the method on a string value.",
                         )
-                    if expr.args:
-                        self.error(
-                            f"str.{expr.func.attr}() does not take arguments",
-                            expr,
-                            hint="Call the method without arguments.",
-                        )
-                    if expr.func.attr == "upper":
-                        self.ctx.uses_str_upper = True
-                    elif expr.func.attr == "lower":
-                        self.ctx.uses_str_lower = True
-                    else:
-                        self.ctx.uses_str_strip = True
-                    self.ctx.uses_string = True
-                    return self.annotate(expr, StringType())
+                    if expr.func.attr in {"upper", "lower", "strip"}:
+                        if expr.args:
+                            self.error(
+                                f"str.{expr.func.attr}() does not take arguments",
+                                expr,
+                                hint="Call the method without arguments.",
+                            )
+                        if expr.func.attr == "upper":
+                            self.ctx.uses_str_upper = True
+                        elif expr.func.attr == "lower":
+                            self.ctx.uses_str_lower = True
+                        else:
+                            self.ctx.uses_str_strip = True
+                        self.ctx.uses_string = True
+                        return self.annotate(expr, StringType())
+                    if expr.func.attr in {"startswith", "endswith", "find"}:
+                        if len(arg_types) != 1 or not isinstance(arg_types[0], StringType):
+                            self.error(
+                                f"str.{expr.func.attr}() expects one string argument",
+                                expr,
+                                hint="Pass a single string argument.",
+                            )
+                        if expr.func.attr == "startswith":
+                            self.ctx.uses_str_startswith = True
+                            self.ctx.uses_string = True
+                            return self.annotate(expr, BoolType())
+                        if expr.func.attr == "endswith":
+                            self.ctx.uses_str_endswith = True
+                            self.ctx.uses_string = True
+                            return self.annotate(expr, BoolType())
+                        self.ctx.uses_str_find = True
+                        self.ctx.uses_string = True
+                        return self.annotate(expr, IntType())
+                    if expr.func.attr == "replace":
+                        if len(arg_types) != 2 or not isinstance(arg_types[0], StringType) or not isinstance(
+                            arg_types[1], StringType
+                        ):
+                            self.error(
+                                "str.replace() expects two string arguments",
+                                expr,
+                                hint="Use text.replace(old, new).",
+                            )
+                        self.ctx.uses_str_replace = True
+                        self.ctx.uses_string = True
+                        return self.annotate(expr, StringType())
                 if expr.func.attr in {"append", "pop"}:
                     if not isinstance(recv_type, ListType):
                         self.error(
@@ -862,6 +1002,26 @@ class TypeInferencer(ast.NodeVisitor):
                                 hint="Use list.pop() with no arguments.",
                             )
                         return self.annotate(expr, recv_type.element_type)
+                if expr.func.attr in {"add", "remove"}:
+                    if not isinstance(recv_type, SetType):
+                        self.error(
+                            f"set.{expr.func.attr}() is only valid on sets",
+                            expr,
+                            hint="Call the method on a set value.",
+                        )
+                    if len(arg_types) != 1:
+                        self.error(
+                            f"set.{expr.func.attr}() expects one argument",
+                            expr,
+                            hint="Use set.add(value) or set.remove(value).",
+                        )
+                    if arg_types and arg_types[0] != recv_type.element_type:
+                        self.error(
+                            "set element type must match",
+                            expr,
+                            hint="Use an element of the set's type.",
+                        )
+                    return self.annotate(expr, UnknownType())
 
         # print(...) returns nothing usable
         if isinstance(expr.func, ast.Name) and expr.func.id == "print":
@@ -950,6 +1110,7 @@ class TypeInferencer(ast.NodeVisitor):
         return branches
 
 
-def infer_types(tree: ast.AST, filename: str, lines: List[str]) -> TypeContext:
+def infer_types(tree: ast.AST, filename: str, lines: List[str]) -> tuple[TypeContext, List[PhoenixError]]:
     inferencer = TypeInferencer(filename, lines)
-    return inferencer.infer(tree)
+    ctx = inferencer.infer(tree)
+    return ctx, inferencer.errors

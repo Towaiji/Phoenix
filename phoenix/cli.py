@@ -6,7 +6,8 @@ import shutil
 from pathlib import Path
 
 from phoenix.checker import check_types
-from phoenix.errors import PhoenixError
+from phoenix.errors import PhoenixError, PhoenixErrors
+from phoenix.module_loader import annotate_source, resolve_imports
 from phoenix.transpiler import transpile
 
 
@@ -50,6 +51,10 @@ def main():
 
         # ---- parse + check ----
         tree = ast.parse(source)
+        annotate_source(tree, filename, lines)
+        tree, import_errors = resolve_imports(tree, filename, lines, Path(filename).parent)
+        if import_errors:
+            raise PhoenixErrors(import_errors)
         type_ctx = check_types(tree, filename, lines)
 
         if mode == "check":
@@ -73,6 +78,10 @@ def main():
 
         print("✓ Compiled to native binary: ./output")
         print("✓ Phoenix approved. Code is type-stable.")
+
+    except PhoenixErrors as e:
+        print(e.pretty())
+        sys.exit(1)
 
     except PhoenixError as e:
         print(e.pretty())

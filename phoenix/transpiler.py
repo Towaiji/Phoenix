@@ -263,6 +263,70 @@ class CEmitter:
             self.emit("}")
             self.emit()
 
+        if self.type_ctx.uses_str_startswith:
+            self.emit("bool phoenix_str_startswith(const char *s, const char *prefix) {")
+            self.indent += 1
+            self.emit("size_t n = strlen(prefix);")
+            self.emit("return strncmp(s, prefix, n) == 0;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_str_endswith:
+            self.emit("bool phoenix_str_endswith(const char *s, const char *suffix) {")
+            self.indent += 1
+            self.emit("size_t slen = strlen(s);")
+            self.emit("size_t tlen = strlen(suffix);")
+            self.emit("if (tlen > slen) return false;")
+            self.emit("return strcmp(s + slen - tlen, suffix) == 0;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_str_find:
+            self.emit("int phoenix_str_find(const char *s, const char *sub) {")
+            self.indent += 1
+            self.emit("const char *pos = strstr(s, sub);")
+            self.emit("if (!pos) return -1;")
+            self.emit("return (int)(pos - s);")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_str_replace:
+            self.emit("const char *phoenix_str_replace(const char *s, const char *old, const char *neu) {")
+            self.indent += 1
+            self.emit("static char buf[256];")
+            self.emit("if (old[0] == '\\0') return s;")
+            self.emit("const char *p = s;")
+            self.emit("char *out = buf;")
+            self.emit("size_t old_len = strlen(old);")
+            self.emit("size_t new_len = strlen(neu);")
+            self.emit("while (*p && (out - buf) < 255) {")
+            self.indent += 1
+            self.emit("const char *hit = strstr(p, old);")
+            self.emit("if (!hit) break;")
+            self.emit("size_t chunk = (size_t)(hit - p);")
+            self.emit("if ((out - buf) + chunk >= 255) break;")
+            self.emit("memcpy(out, p, chunk);")
+            self.emit("out += chunk;")
+            self.emit("if ((out - buf) + new_len >= 255) break;")
+            self.emit("memcpy(out, neu, new_len);")
+            self.emit("out += new_len;")
+            self.emit("p = hit + old_len;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("while (*p && (out - buf) < 255) {")
+            self.indent += 1
+            self.emit("*out++ = *p++;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("*out = '\\0';")
+            self.emit("return buf;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
         if self.type_ctx.uses_bounds_check:
             self.emit("int phoenix_bounds_check(int idx, int len) {")
             self.indent += 1
@@ -344,82 +408,15 @@ class CEmitter:
         self.emit("}")
         self.emit()
 
-        if self.type_ctx.uses_str_upper:
-            self.emit("const char *phoenix_str_upper(const char *s) {")
-            self.indent += 1
-            self.emit("static char buf[256];")
-            self.emit("int i = 0;")
-            self.emit("for (; s[i] != '\\0' && i < 255; i++) {")
-            self.indent += 1
-            self.emit("buf[i] = (char)toupper((unsigned char)s[i]);")
-            self.indent -= 1
-            self.emit("}")
-            self.emit("buf[i] = '\\0';")
-            self.emit("return buf;")
-            self.indent -= 1
-            self.emit("}")
-            self.emit()
-
-        if self.type_ctx.uses_str_lower:
-            self.emit("const char *phoenix_str_lower(const char *s) {")
-            self.indent += 1
-            self.emit("static char buf[256];")
-            self.emit("int i = 0;")
-            self.emit("for (; s[i] != '\\0' && i < 255; i++) {")
-            self.indent += 1
-            self.emit("buf[i] = (char)tolower((unsigned char)s[i]);")
-            self.indent -= 1
-            self.emit("}")
-            self.emit("buf[i] = '\\0';")
-            self.emit("return buf;")
-            self.indent -= 1
-            self.emit("}")
-            self.emit()
-
-        if self.type_ctx.uses_str_strip:
-            self.emit("const char *phoenix_str_strip(const char *s) {")
-            self.indent += 1
-            self.emit("static char buf[256];")
-            self.emit("const char *start = s;")
-            self.emit("while (*start && isspace((unsigned char)*start)) {")
-            self.indent += 1
-            self.emit("start++;")
-            self.indent -= 1
-            self.emit("}")
-            self.emit("const char *end = start + strlen(start);")
-            self.emit("while (end > start && isspace((unsigned char)*(end - 1))) {")
-            self.indent += 1
-            self.emit("end--;")
-            self.indent -= 1
-            self.emit("}")
-            self.emit("int len = (int)(end - start);")
-            self.emit("if (len > 255) len = 255;")
-            self.emit("memcpy(buf, start, (size_t)len);")
-            self.emit("buf[len] = '\\0';")
-            self.emit("return buf;")
-            self.indent -= 1
-            self.emit("}")
-            self.emit()
-
-        if self.type_ctx.uses_bounds_check:
-            self.emit("int phoenix_bounds_check(int idx, int len) {")
-            self.indent += 1
-            self.emit("if (idx < 0 || idx >= len) {")
-            self.indent += 1
-            self.emit('fprintf(stderr, "PhoenixError: index %d out of bounds for length %d\\n", idx, len);')
-            self.emit("exit(1);")
-            self.indent -= 1
-            self.emit("}")
-            self.emit("return idx;")
-            self.indent -= 1
-            self.emit("}")
-            self.emit()
-
-        for key_t, val_t in sorted(self.type_ctx.dict_types, key=lambda x: (repr(x[0]), repr(x[1]))):
-            self._emit_dict_helpers(key_t, val_t)
-
-        for elem_t in sorted(self.type_ctx.set_types, key=lambda x: repr(x)):
-            self._emit_set_helpers(elem_t)
+        self.emit(f"void phoenix_list_{suffix}_free({struct_name} *list) {{")
+        self.indent += 1
+        self.emit("free(list->data);")
+        self.emit("list->data = NULL;")
+        self.emit("list->len = 0;")
+        self.emit("list->cap = 0;")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
 
     def _emit_dict_helpers(self, key_t: Type, val_t: Type) -> None:
         key_suffix = self._dict_key_suffix(key_t)
@@ -430,6 +427,7 @@ class CEmitter:
         self.emit(f"typedef struct {{")
         self.indent += 1
         self.emit("int len;")
+        self.emit("int cap;")
         self.emit(f"{key_c} *keys;")
         self.emit(f"{val_c} *values;")
         self.indent -= 1
@@ -457,6 +455,74 @@ class CEmitter:
         self.emit("}")
         self.emit()
 
+        func_name = f"phoenix_dict_{key_suffix}_{val_suffix}_set"
+        self.emit(f"void {func_name}({struct_name} *dict, {key_c} key, {val_c} value) {{")
+        self.indent += 1
+        self.emit("for (int i = 0; i < dict->len; i++) {")
+        self.indent += 1
+        if isinstance(key_t, StringType):
+            self.emit("if (strcmp(dict->keys[i], key) == 0) {")
+        else:
+            self.emit("if (dict->keys[i] == key) {")
+        self.indent += 1
+        self.emit("dict->values[i] = value;")
+        self.emit("return;")
+        self.indent -= 1
+        self.emit("}")
+        self.indent -= 1
+        self.emit("}")
+        self.emit("if (dict->len >= dict->cap) {")
+        self.indent += 1
+        self.emit("int new_cap = dict->cap ? dict->cap * 2 : 4;")
+        self.emit(f"dict->keys = ({key_c} *)realloc(dict->keys, sizeof({key_c}) * new_cap);")
+        self.emit(f"dict->values = ({val_c} *)realloc(dict->values, sizeof({val_c}) * new_cap);")
+        self.emit("dict->cap = new_cap;")
+        self.indent -= 1
+        self.emit("}")
+        self.emit("dict->keys[dict->len] = key;")
+        self.emit("dict->values[dict->len] = value;")
+        self.emit("dict->len += 1;")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
+
+        func_name = f"phoenix_dict_{key_suffix}_{val_suffix}_delete"
+        self.emit(f"void {func_name}({struct_name} *dict, {key_c} key) {{")
+        self.indent += 1
+        self.emit("for (int i = 0; i < dict->len; i++) {")
+        self.indent += 1
+        if isinstance(key_t, StringType):
+            self.emit("if (strcmp(dict->keys[i], key) == 0) {")
+        else:
+            self.emit("if (dict->keys[i] == key) {")
+        self.indent += 1
+        self.emit("dict->len -= 1;")
+        self.emit("dict->keys[i] = dict->keys[dict->len];")
+        self.emit("dict->values[i] = dict->values[dict->len];")
+        self.emit("return;")
+        self.indent -= 1
+        self.emit("}")
+        self.indent -= 1
+        self.emit("}")
+        self.emit('fprintf(stderr, "PhoenixError: key not found in dict\\n");')
+        self.emit("exit(1);")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
+
+        func_name = f"phoenix_dict_{key_suffix}_{val_suffix}_free"
+        self.emit(f"void {func_name}({struct_name} *dict) {{")
+        self.indent += 1
+        self.emit("free(dict->keys);")
+        self.emit("free(dict->values);")
+        self.emit("dict->keys = NULL;")
+        self.emit("dict->values = NULL;")
+        self.emit("dict->len = 0;")
+        self.emit("dict->cap = 0;")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
+
     def _emit_set_helpers(self, elem_t: Type) -> None:
         elem_suffix = self._set_elem_suffix(elem_t)
         elem_c = "int" if isinstance(elem_t, IntType) else "const char *"
@@ -464,6 +530,7 @@ class CEmitter:
         self.emit("typedef struct {")
         self.indent += 1
         self.emit("int len;")
+        self.emit("int cap;")
         self.emit(f"{elem_c} *data;")
         self.indent -= 1
         self.emit(f"}} {struct_name};")
@@ -489,6 +556,68 @@ class CEmitter:
         self.emit("}")
         self.emit()
 
+        func_name = f"phoenix_set_{elem_suffix}_add"
+        self.emit(f"void {func_name}({struct_name} *set, {elem_c} value) {{")
+        self.indent += 1
+        self.emit("for (int i = 0; i < set->len; i++) {")
+        self.indent += 1
+        if isinstance(elem_t, StringType):
+            self.emit("if (strcmp(set->data[i], value) == 0) {")
+        else:
+            self.emit("if (set->data[i] == value) {")
+        self.indent += 1
+        self.emit("return;")
+        self.indent -= 1
+        self.emit("}")
+        self.indent -= 1
+        self.emit("}")
+        self.emit("if (set->len >= set->cap) {")
+        self.indent += 1
+        self.emit("int new_cap = set->cap ? set->cap * 2 : 4;")
+        self.emit(f"set->data = ({elem_c} *)realloc(set->data, sizeof({elem_c}) * new_cap);")
+        self.emit("set->cap = new_cap;")
+        self.indent -= 1
+        self.emit("}")
+        self.emit("set->data[set->len] = value;")
+        self.emit("set->len += 1;")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
+
+        func_name = f"phoenix_set_{elem_suffix}_remove"
+        self.emit(f"void {func_name}({struct_name} *set, {elem_c} value) {{")
+        self.indent += 1
+        self.emit("for (int i = 0; i < set->len; i++) {")
+        self.indent += 1
+        if isinstance(elem_t, StringType):
+            self.emit("if (strcmp(set->data[i], value) == 0) {")
+        else:
+            self.emit("if (set->data[i] == value) {")
+        self.indent += 1
+        self.emit("set->len -= 1;")
+        self.emit("set->data[i] = set->data[set->len];")
+        self.emit("return;")
+        self.indent -= 1
+        self.emit("}")
+        self.indent -= 1
+        self.emit("}")
+        self.emit('fprintf(stderr, "PhoenixError: value not found in set\\n");')
+        self.emit("exit(1);")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
+
+        func_name = f"phoenix_set_{elem_suffix}_free"
+        self.emit(f"void {func_name}({struct_name} *set) {{")
+        self.indent += 1
+        self.emit("free(set->data);")
+        self.emit("set->data = NULL;")
+        self.emit("set->len = 0;")
+        self.emit("set->cap = 0;")
+        self.indent -= 1
+        self.emit("}")
+        self.emit()
+
     def emit_block(self, body):
         self.indent += 1
         for stmt in body:
@@ -508,6 +637,8 @@ class CEmitter:
             self.emit_while(node)
         elif isinstance(node, ast.If):
             self.emit_if(node)
+        elif isinstance(node, ast.Delete):
+            self.emit_delete(node)
         elif isinstance(node, ast.Expr):
             self.emit_expr(node)
 
@@ -559,9 +690,33 @@ class CEmitter:
                 self.emit(f"{name} = {rhs};")
 
         elif isinstance(target, ast.Subscript):
-            lhs = self.expr(target)
-            rhs = self.expr(value)
-            self.emit(f"{lhs} = {rhs};")
+            container_type = self._type_of(target.value)
+            if isinstance(container_type, DictType):
+                key_expr = target.slice.value if isinstance(target.slice, ast.Index) else target.slice
+                key = self.expr(key_expr)
+                val = self.expr(value)
+                key_suffix = self._dict_key_suffix(container_type.key_type)
+                val_suffix = self._dict_val_suffix(container_type.value_type)
+                func = f"phoenix_dict_{key_suffix}_{val_suffix}_set"
+                self.emit(f"{func}(&{self.expr(target.value)}, {key}, {val});")
+            else:
+                lhs = self.expr(target)
+                rhs = self.expr(value)
+                self.emit(f"{lhs} = {rhs};")
+
+    def emit_delete(self, node: ast.Delete):
+        for target in node.targets:
+            if isinstance(target, ast.Subscript):
+                container_type = self._type_of(target.value)
+                if isinstance(container_type, DictType):
+                    key_expr = target.slice.value if isinstance(target.slice, ast.Index) else target.slice
+                    key = self.expr(key_expr)
+                    key_suffix = self._dict_key_suffix(container_type.key_type)
+                    val_suffix = self._dict_val_suffix(container_type.value_type)
+                    func = f"phoenix_dict_{key_suffix}_{val_suffix}_delete"
+                    self.emit(f"{func}(&{self.expr(target.value)}, {key});")
+                    continue
+            raise Exception("Delete is only supported for dict keys")
 
     def emit_function(self, node: ast.FunctionDef):
         name = node.name
@@ -605,6 +760,7 @@ class CEmitter:
             self.emit(f"{c_type_name(t)} {name};")
             self.declared.add(name)
         self.emit(f"{name}.len = {size};")
+        self.emit(f"{name}.cap = {size};")
         self.emit(f"{name}.keys = ({key_c} *)malloc(sizeof({key_c}) * {size});")
         self.emit(f"{name}.values = ({val_c} *)malloc(sizeof({val_c}) * {size});")
 
@@ -627,6 +783,7 @@ class CEmitter:
             self.emit(f"{c_type_name(t)} {name};")
             self.declared.add(name)
         self.emit(f"{name}.len = {size};")
+        self.emit(f"{name}.cap = {size};")
         self.emit(f"{name}.data = ({elem_c} *)malloc(sizeof({elem_c}) * {size});")
         for idx, e in enumerate(value.elts):
             elem_expr = self.expr(e)
@@ -738,7 +895,7 @@ class CEmitter:
                 else:
                     fmt = "%d"
                 self.emit(f'printf("{fmt}\\n", {expr});')
-            elif isinstance(call.func, ast.Attribute) and call.func.attr in {"append", "pop"}:
+            elif isinstance(call.func, ast.Attribute) and call.func.attr in {"append", "pop", "add", "remove"}:
                 expr = self.expr(call)
                 self.emit(f"{expr};")
 
@@ -807,6 +964,10 @@ class CEmitter:
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             operand = self.expr(node.operand)
             return f"!({operand})"
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+            operand = self.expr(node.operand)
+            op = "-" if isinstance(node.op, ast.USub) else "+"
+            return f"{op}({operand})"
 
         if isinstance(node, ast.Compare):
             if len(node.ops) == 1 and isinstance(node.ops[0], (ast.In, ast.NotIn)):
@@ -967,7 +1128,6 @@ class CEmitter:
                         "asin",
                         "acos",
                         "atan",
-                        "fabs",
                         "pow",
                     }
                 ):
@@ -976,13 +1136,36 @@ class CEmitter:
                         right = self.expr(node.args[1])
                         return f"pow({arg}, {right})"
                     return f"{node.func.attr}({arg})"
-                if node.func.attr in {"upper", "lower", "strip"}:
+                if (
+                    isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "math"
+                    and node.func.attr == "fabs"
+                ):
+                    arg = self.expr(node.args[0])
+                    arg_t = self._type_of(node.args[0])
+                    if isinstance(arg_t, IntType):
+                        return f"fabs((double){arg})"
+                    return f"fabs({arg})"
+                if node.func.attr in {"upper", "lower", "strip", "startswith", "endswith", "find", "replace"}:
                     target = self.expr(node.func.value)
                     if node.func.attr == "upper":
                         return f"phoenix_str_upper({target})"
                     if node.func.attr == "lower":
                         return f"phoenix_str_lower({target})"
-                    return f"phoenix_str_strip({target})"
+                    if node.func.attr == "strip":
+                        return f"phoenix_str_strip({target})"
+                    if node.func.attr == "startswith":
+                        arg = self.expr(node.args[0])
+                        return f"phoenix_str_startswith({target}, {arg})"
+                    if node.func.attr == "endswith":
+                        arg = self.expr(node.args[0])
+                        return f"phoenix_str_endswith({target}, {arg})"
+                    if node.func.attr == "find":
+                        arg = self.expr(node.args[0])
+                        return f"phoenix_str_find({target}, {arg})"
+                    arg_old = self.expr(node.args[0])
+                    arg_new = self.expr(node.args[1])
+                    return f"phoenix_str_replace({target}, {arg_old}, {arg_new})"
                 if node.func.attr in {"append", "pop"}:
                     target = self.expr(node.func.value)
                     recv_t = self._type_of(node.func.value)
@@ -992,6 +1175,15 @@ class CEmitter:
                             arg = self.expr(node.args[0])
                             return f"phoenix_list_{suffix}_append(&{target}, {arg})"
                         return f"phoenix_list_{suffix}_pop(&{target})"
+                if node.func.attr in {"add", "remove"}:
+                    target = self.expr(node.func.value)
+                    recv_t = self._type_of(node.func.value)
+                    if isinstance(recv_t, SetType):
+                        suffix = self._set_elem_suffix(recv_t.element_type)
+                        arg = self.expr(node.args[0])
+                        if node.func.attr == "add":
+                            return f"phoenix_set_{suffix}_add(&{target}, {arg})"
+                        return f"phoenix_set_{suffix}_remove(&{target}, {arg})"
 
             if isinstance(node.func, ast.Name):
                 func = node.func.id
@@ -1061,6 +1253,10 @@ def transpile(tree, type_ctx: TypeContext):
         headers.add("<stdio.h>")
     if type_ctx.uses_str_upper or type_ctx.uses_str_lower or type_ctx.uses_str_strip:
         headers.update({"<ctype.h>", "<string.h>", "<stdio.h>"})
+    if type_ctx.uses_str_startswith or type_ctx.uses_str_endswith:
+        headers.update({"<string.h>", "<stdbool.h>"})
+    if type_ctx.uses_str_find or type_ctx.uses_str_replace:
+        headers.add("<string.h>")
     if type_ctx.uses_bounds_check:
         headers.update({"<stdio.h>", "<stdlib.h>"})
     if (
@@ -1090,6 +1286,25 @@ def transpile(tree, type_ctx: TypeContext):
     for stmt in tree.body:
         if not isinstance(stmt, ast.FunctionDef):
             emitter.emit_stmt(stmt)
+
+    for name in sorted(type_ctx.dynamic_list_vars):
+        t = type_ctx.globals.get(name)
+        if isinstance(t, ListType) and t.length is None:
+            suffix = emitter._list_suffix(t.element_type)
+            emitter.emit(f"phoenix_list_{suffix}_free(&{name});")
+
+    for name in sorted(type_ctx.dict_vars):
+        t = type_ctx.globals.get(name)
+        if isinstance(t, DictType):
+            key_suffix = emitter._dict_key_suffix(t.key_type)
+            val_suffix = emitter._dict_val_suffix(t.value_type)
+            emitter.emit(f"phoenix_dict_{key_suffix}_{val_suffix}_free(&{name});")
+
+    for name in sorted(type_ctx.set_vars):
+        t = type_ctx.globals.get(name)
+        if isinstance(t, SetType):
+            elem_suffix = emitter._set_elem_suffix(t.element_type)
+            emitter.emit(f"phoenix_set_{elem_suffix}_free(&{name});")
 
     emitter.emit("return 0;")
     emitter.indent -= 1
