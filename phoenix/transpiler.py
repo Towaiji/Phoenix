@@ -731,6 +731,8 @@ class CEmitter:
 
         def _param_decl(t: Type, name: str) -> str:
             if isinstance(t, ListType):
+                if t.length is None:
+                    return f"{c_type_name(t)} {name}"
                 return f"{c_type_name(t.element_type)} {name}[]"
             return f"{c_type_name(t)} {name}"
 

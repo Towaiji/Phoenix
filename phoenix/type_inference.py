@@ -187,6 +187,8 @@ class TypeInferencer(ast.NodeVisitor):
         existing = env.get(name)
         if existing and not isinstance(existing, UnknownType) and existing != t:
             if isinstance(existing, ListType) and isinstance(t, ListType):
+                if isinstance(t.element_type, UnknownType) and existing.length == t.length:
+                    return
                 if isinstance(existing.element_type, UnknownType) and existing.length == t.length:
                     env[name] = t
                     return
@@ -410,11 +412,13 @@ class TypeInferencer(ast.NodeVisitor):
 
         self.in_if = True
         self.conditional_depth += 1
-        for _test, body in branches:
-            for stmt in body:
-                self.visit(stmt)
-        self.conditional_depth -= 1
-        self.in_if = False
+        try:
+            for _test, body in branches:
+                for stmt in body:
+                    self.visit(stmt)
+        finally:
+            self.conditional_depth -= 1
+            self.in_if = False
 
     def visit_Return(self, node: ast.Return) -> None:
         if node.value is None:

@@ -586,7 +586,9 @@ def _check_bounds(
                 )
                 type_ctx.runtime_bounds_checks.add(node)
                 type_ctx.uses_bounds_check = True
-                continue
+            type_ctx.runtime_bounds_checks.add(node)
+            type_ctx.uses_bounds_check = True
+            continue
         idx_node = _slice_expr(node)
         idx_value = _const_int_value(idx_node)
         if idx_value is not None:
