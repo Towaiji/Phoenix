@@ -238,6 +238,51 @@ class CEmitter:
             self.emit("}")
             self.emit()
 
+        if self.type_ctx.uses_str_strip:
+            self.emit("const char *phoenix_str_strip(const char *s) {")
+            self.indent += 1
+            self.emit("static char buf[256];")
+            self.emit("const char *start = s;")
+            self.emit("while (*start && isspace((unsigned char)*start)) {")
+            self.indent += 1
+            self.emit("start++;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("const char *end = start + strlen(start);")
+            self.emit("while (end > start && isspace((unsigned char)*(end - 1))) {")
+            self.indent += 1
+            self.emit("end--;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("int len = (int)(end - start);")
+            self.emit("if (len > 255) len = 255;")
+            self.emit("memcpy(buf, start, (size_t)len);")
+            self.emit("buf[len] = '\\0';")
+            self.emit("return buf;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        if self.type_ctx.uses_bounds_check:
+            self.emit("int phoenix_bounds_check(int idx, int len) {")
+            self.indent += 1
+            self.emit("if (idx < 0 || idx >= len) {")
+            self.indent += 1
+            self.emit('fprintf(stderr, "PhoenixError: index %d out of bounds for length %d\\n", idx, len);')
+            self.emit("exit(1);")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("return idx;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit()
+
+        for key_t, val_t in sorted(self.type_ctx.dict_types, key=lambda x: (repr(x[0]), repr(x[1]))):
+            self._emit_dict_helpers(key_t, val_t)
+
+        for elem_t in sorted(self.type_ctx.set_types, key=lambda x: repr(x)):
+            self._emit_set_helpers(elem_t)
+
     def _emit_dyn_list_helpers(self, suffix: str, c_elem: str) -> None:
         struct_name = f"PhoenixList{suffix.capitalize()}"
         self.emit(f"typedef struct {{")
