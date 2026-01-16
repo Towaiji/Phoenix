@@ -129,6 +129,23 @@ If any rule is violated, compilation fails with a precise error message.
 
 ---
 
+## Feature Matrix
+
+| Feature | Static-Proofed | Runtime-Checked |
+| --- | --- | --- |
+| Type stability | ✅ | — |
+| Homogeneous containers | ✅ | — |
+| For-loop bounds | ✅ (range/known-length lists) | — |
+| While termination | ✅ (strict counter pattern) | — |
+| List indexing | ✅ (literal index + known length) | ✅ (dynamic index or dynamic list) |
+| Dynamic lists (append/pop/slice) | — | ✅ |
+| Dict/Set lookup | — | ✅ (missing key) |
+| Set membership (`in`/`not in`) | ✅ (type match) | ✅ (lookup) |
+
+Static = guaranteed at compile time. Runtime = guarded with checks in generated C.
+
+---
+
 ## Architecture Overview
 
 Phoenix pipeline:

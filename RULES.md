@@ -21,7 +21,7 @@ Phoenix v1 Rules
      - the counter is updated exactly once per iteration
      - the update is monotonic and moves toward the literal bound
      - no other code mutates the counter
-5. Complex logic is allowed only if all types, shapes, and termination can be statically proven at compile time.
+5. Complex logic is allowed only if types are statically proven and safety can be guaranteed either statically or with explicit runtime checks.
 6. Transpilation is explicit (optional):
    - phoenix check file.py runs analysis only
    - phoenix build file.py always transpiles to C and compiles
