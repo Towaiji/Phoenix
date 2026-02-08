@@ -1,5 +1,9 @@
 # Phoenix
 
+
+[Pypi Published docs]([https://www.example.com](https://pypi.org/project/phoenix-lang-cli/0.1.0/)) 
+
+
 Phoenix is a statically verified, Python-like language that compiles to optimized C.
 
 It enforces a **zero-ambiguity** execution model: if performance cannot be proven at compile time, the program is rejected.
