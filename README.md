@@ -1,7 +1,7 @@
 # Phoenix
 
 
-[Pypi Published docs]((https://pypi.org/project/phoenix-lang-cli/0.1.0/)) 
+[Pypi Published docs](https://pypi.org/project/phoenix-lang-cli/0.1.0/) 
 
 
 Phoenix is a statically verified, Python-like language that compiles to optimized C.
