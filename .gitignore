@@ -15,3 +15,11 @@ output
 output.c
 .phoenix_cache/
 *.bin
+
+.env
+
+# Python packaging artifacts
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
