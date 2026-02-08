@@ -23,6 +23,24 @@ python3 -m phoenix.cli examples/good_big.py   # emits output.c and ./output
 
 Phoenix caches binaries in `.phoenix_cache/` keyed by source hash, so repeat builds are instant.
 
+## Install As CLI (pip)
+
+```bash
+# from this repository root
+python3 -m pip install .
+
+# then use the CLI directly
+phoenix examples/good_big.py
+phoenix check examples/good_big.py
+phoenix build examples/good_big.py
+```
+
+For editable local development:
+
+```bash
+python3 -m pip install -e .
+```
+
 ---
 
 ## Why Phoenix
