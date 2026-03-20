@@ -23,7 +23,10 @@ classifiers = [
 phoenix = "phoenix.cli:main"
 
 [tool.setuptools]
-include-package-data = false
+include-package-data = true
 
 [tool.setuptools.packages.find]
 include = ["phoenix*"]
+
+[tool.setuptools.package-data]
+phoenix = ["examples/*.py"]

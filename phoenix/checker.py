@@ -241,7 +241,7 @@ def _check_control_flow(
                     return True
         return False
 
-    def _check_for(node: ast.For, const_ints: dict, list_lengths: dict) -> None:
+    def _check_for(node: ast.For, const_ints: dict, list_lengths: dict, dynamic_list_names: set, dict_var_names: set = None) -> None:
         if isinstance(node.iter, ast.Call):
             if not isinstance(node.iter.func, ast.Name) or node.iter.func.id != "range":
                 _record_error(
@@ -302,14 +302,20 @@ def _check_control_flow(
         if isinstance(node.iter, ast.Name) and node.iter.id in list_lengths:
             return
 
+        if isinstance(node.iter, ast.Name) and node.iter.id in dynamic_list_names:
+            return
+
+        if dict_var_names and isinstance(node.iter, ast.Name) and node.iter.id in dict_var_names:
+            return
+
         _record_error(
             errors,
             _error(
-                "For-loop iterable must be range(...) or a list with known length.",
+                "For-loop iterable must be range(...), a list literal, or a known list/dict variable.",
                 node,
                 filename,
                 lines,
-                hint="Use a list literal or a list assigned from a literal.",
+                hint="Use `range(n)`, a list variable, or a dict variable.",
                 rule_id="R4",
             ),
         )
@@ -405,11 +411,11 @@ def _check_control_flow(
             )
             return
 
-    def _check_block(stmts: List[ast.stmt], assigned: set, const_ints: dict, list_lengths: dict) -> None:
+    def _check_block(stmts: List[ast.stmt], assigned: set, const_ints: dict, list_lengths: dict, dynamic_list_names: set, dict_var_names: set) -> None:
         for stmt in stmts:
             if isinstance(stmt, ast.FunctionDef):
                 func_assigned = {arg.arg for arg in stmt.args.args}
-                _check_block(stmt.body, func_assigned, {}, {})
+                _check_block(stmt.body, func_assigned, {}, {}, set(), set())
                 continue
 
             if isinstance(stmt, ast.Assign):
@@ -422,6 +428,10 @@ def _check_control_flow(
                         elif isinstance(stmt.value, ast.List):
                             list_lengths[target.id] = len(stmt.value.elts)
                             const_ints.pop(target.id, None)
+                        elif isinstance(stmt.value, ast.Dict):
+                            dict_var_names.add(target.id)
+                            const_ints.pop(target.id, None)
+                            list_lengths.pop(target.id, None)
                         else:
                             const_ints.pop(target.id, None)
                             list_lengths.pop(target.id, None)
@@ -435,15 +445,15 @@ def _check_control_flow(
                 continue
 
             if isinstance(stmt, ast.For):
-                _check_for(stmt, const_ints, list_lengths)
+                _check_for(stmt, const_ints, list_lengths, dynamic_list_names, dict_var_names)
                 if isinstance(stmt.target, ast.Name):
                     assigned.add(stmt.target.id)
-                _check_block(stmt.body, set(assigned), dict(const_ints), dict(list_lengths))
+                _check_block(stmt.body, set(assigned), dict(const_ints), dict(list_lengths), set(dynamic_list_names), set(dict_var_names))
                 continue
 
             if isinstance(stmt, ast.While):
                 _check_while(stmt, assigned)
-                _check_block(stmt.body, set(assigned), dict(const_ints), dict(list_lengths))
+                _check_block(stmt.body, set(assigned), dict(const_ints), dict(list_lengths), set(dynamic_list_names), set(dict_var_names))
                 continue
 
             if isinstance(stmt, ast.If):
@@ -453,8 +463,8 @@ def _check_control_flow(
                 else_consts = dict(const_ints)
                 body_lists = dict(list_lengths)
                 else_lists = dict(list_lengths)
-                _check_block(stmt.body, body_assigned, body_consts, body_lists)
-                _check_block(stmt.orelse, else_assigned, else_consts, else_lists)
+                _check_block(stmt.body, body_assigned, body_consts, body_lists, set(dynamic_list_names), set(dict_var_names))
+                _check_block(stmt.orelse, else_assigned, else_consts, else_lists, set(dynamic_list_names), set(dict_var_names))
                 if stmt.orelse:
                     assigned.update(body_assigned & else_assigned)
                     const_ints.clear()
@@ -471,8 +481,9 @@ def _check_control_flow(
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                     if node.func.attr in {"append", "pop"} and isinstance(node.func.value, ast.Name):
                         list_lengths.pop(node.func.value.id, None)
+                        dynamic_list_names.add(node.func.value.id)
 
-    _check_block(tree.body, set(), {}, {})
+    _check_block(tree.body, set(), {}, {}, set(), set())
 
 
 def _check_dynamic_features(

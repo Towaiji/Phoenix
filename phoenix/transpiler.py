@@ -631,6 +631,8 @@ class CEmitter:
     def emit_stmt(self, node):
         if isinstance(node, ast.Assign):
             self.emit_assign(node)
+        elif isinstance(node, ast.AugAssign):
+            self.emit_aug_assign(node)
         elif isinstance(node, ast.For):
             self.emit_for(node)
         elif isinstance(node, ast.While):
@@ -641,6 +643,13 @@ class CEmitter:
             self.emit_delete(node)
         elif isinstance(node, ast.Expr):
             self.emit_expr(node)
+
+    def emit_aug_assign(self, node: ast.AugAssign):
+        target = self.expr(node.target)
+        value = self.expr(node.value)
+        op_map = {ast.Add: "+=", ast.Sub: "-=", ast.Mult: "*=", ast.Div: "/="}
+        op = op_map.get(type(node.op), "+=")
+        self.emit(f"{target} {op} {value};")
 
     def emit_assign(self, node: ast.Assign):
         target = node.targets[0]
@@ -861,6 +870,32 @@ class CEmitter:
             self.emit(f"for (int {idx} = 0; {idx} < {list_type.length}; {idx}++) {{")
             self.indent += 1
             self.emit(f"{elem_type} {var} = {list_expr}[{idx}];")
+            for stmt in node.body:
+                self.emit_stmt(stmt)
+            self.indent -= 1
+            self.emit("}")
+            return
+        if isinstance(list_type, ListType) and list_type.length is None:
+            idx = f"__phoenix_i{self.loop_index}"
+            self.loop_index += 1
+            elem_type = c_type_name(list_type.element_type)
+            var = node.target.id
+            self.emit(f"for (int {idx} = 0; {idx} < {list_expr}.len; {idx}++) {{")
+            self.indent += 1
+            self.emit(f"{elem_type} {var} = {list_expr}.data[{idx}];")
+            for stmt in node.body:
+                self.emit_stmt(stmt)
+            self.indent -= 1
+            self.emit("}")
+            return
+        if isinstance(list_type, DictType):
+            idx = f"__phoenix_i{self.loop_index}"
+            self.loop_index += 1
+            key_c = "int" if isinstance(list_type.key_type, IntType) else "const char *"
+            var = node.target.id
+            self.emit(f"for (int {idx} = 0; {idx} < {list_expr}.len; {idx}++) {{")
+            self.indent += 1
+            self.emit(f"{key_c} {var} = {list_expr}.keys[{idx}];")
             for stmt in node.body:
                 self.emit_stmt(stmt)
             self.indent -= 1

@@ -298,6 +298,12 @@ class TypeInferencer(ast.NodeVisitor):
                 )
         self.annotate(node, value_type)
 
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        target_type = self.infer_expr(node.target)
+        self.infer_expr(node.value)
+        if isinstance(node.target, ast.Name):
+            self.annotate(node.target, target_type)
+
     def visit_Expr(self, node: ast.Expr) -> None:
         value_type = self.infer_expr(node.value)
         self.annotate(node, value_type)
@@ -332,6 +338,8 @@ class TypeInferencer(ast.NodeVisitor):
         target_type: Type = IntType()
         if isinstance(iter_type, ListType):
             target_type = iter_type.element_type
+        elif isinstance(iter_type, DictType):
+            target_type = iter_type.key_type
         if isinstance(node.target, ast.Name):
             self.bind(node.target.id, target_type, node)
             self.annotate(node.target, target_type)
