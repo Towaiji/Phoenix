@@ -659,6 +659,13 @@ class CEmitter:
             name = target.id
             is_new = name not in self.declared
             t = self._type_of(target)
+            if (
+                isinstance(t, ListType)
+                and t.length is None
+                and isinstance(t.element_type, UnknownType)
+                and name in self.type_ctx.globals
+            ):
+                t = self.type_ctx.globals[name]
             c_type = c_type_name(t)
 
             if isinstance(value, ast.List) and isinstance(t, ListType) and t.length is not None:
