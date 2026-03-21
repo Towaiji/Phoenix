@@ -10,6 +10,7 @@ from phoenix.errors import PhoenixError, PhoenixErrors
 from phoenix.module_loader import annotate_source, resolve_imports
 from phoenix.transpiler import transpile
 
+__version__ = "0.1.0"
 
 CACHE_DIR = Path(".phoenix_cache")
 CACHE_DIR.mkdir(exist_ok=True)
@@ -19,7 +20,18 @@ def hash_source(source: str) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
+def _find_compiler():
+    for compiler in ("gcc", "cc", "clang"):
+        if shutil.which(compiler):
+            return compiler
+    return None
+
+
 def main():
+    if len(sys.argv) == 2 and sys.argv[1] in {"--version", "-V"}:
+        print(f"phoenix {__version__}")
+        return
+
     if len(sys.argv) == 2:
         mode = "run"
         filename = sys.argv[1]
@@ -28,9 +40,16 @@ def main():
         filename = sys.argv[2]
     else:
         print("Usage:")
-        print("  python3 -m phoenix.cli <file.py>")
-        print("  python3 -m phoenix.cli check <file.py>")
-        print("  python3 -m phoenix.cli build <file.py>")
+        print("  phoenix <file.py>")
+        print("  phoenix check <file.py>   # analysis only, no compilation")
+        print("  phoenix build <file.py>   # force transpile + compile")
+        print("  phoenix --version")
+        sys.exit(1)
+
+    compiler = _find_compiler()
+    if mode != "check" and compiler is None:
+        print("❌ PhoenixError [Backend]: no C compiler found.")
+        print("  help: Install gcc or clang (e.g. `sudo apt install gcc` or `brew install gcc`)")
         sys.exit(1)
 
     try:
@@ -69,7 +88,7 @@ def main():
 
         # ---- compile ----
         subprocess.run(
-            ["gcc", "output.c", "-o", "output"],
+            [compiler, "output.c", "-O3", "-o", "output"],
             check=True
         )
 

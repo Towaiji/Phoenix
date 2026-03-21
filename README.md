@@ -1,86 +1,47 @@
 # Phoenix
 
-
-[Pypi Published docs](https://pypi.org/project/phoenix-lang-cli/0.1.0/) 
-
+[![PyPI](https://img.shields.io/pypi/v/phoenix-lang-cli)](https://pypi.org/project/phoenix-lang-cli/)
 
 Phoenix is a statically verified, Python-like language that compiles to optimized C.
 
-It enforces a **zero-ambiguity** execution model: if performance cannot be proven at compile time, the program is rejected.
+Write Python-style code. Get native performance.
 
-Phoenix is not a faster Python runtime.  
-Phoenix eliminates Python entirely.
+```
+Python (CPython):   ~0.52s
+Phoenix → gcc -O3: ~0.01s   ← 50–100× faster on numeric workloads
+```
+
+Phoenix is not a faster Python runtime — it eliminates the interpreter entirely.
+
+---
+
+## Install
+
+```bash
+pip install phoenix-lang-cli
+```
+
+Requires: Python 3.9+, `gcc` (or `clang`) on your PATH.
 
 ---
 
 ## Quickstart
 
 ```bash
-python3 -m phoenix.cli examples/good_big.py   # emits output.c and ./output
-./output                                      # run the native binary
-
-# optional CLI:
-# python3 -m phoenix.cli check examples/foo.py   # analysis only
-# python3 -m phoenix.cli build examples/foo.py   # force transpile + compile
-# python3 -m phoenix.cli examples/foo.py         # default: analyze then build/run
+# write a .py file that follows Phoenix rules, then:
+phoenix myfile.py          # check + compile + run
+phoenix check myfile.py    # analysis only (no gcc needed)
+phoenix build myfile.py    # force recompile
+phoenix --version
 ```
 
-Phoenix caches binaries in `.phoenix_cache/` keyed by source hash, so repeat builds are instant.
-
-## Install As CLI (pip)
-
-```bash
-# from this repository root
-python3 -m pip install .
-
-# then use the CLI directly
-phoenix examples/good_big.py
-phoenix check examples/good_big.py
-phoenix build examples/good_big.py
-```
-
-For editable local development:
-
-```bash
-python3 -m pip install -e .
-```
-
----
-
-## Why Phoenix
-
-Python is easy to write but slow to execute due to:
-- dynamic typing
-- runtime dispatch
-- interpreter overhead
-
-Phoenix takes a different approach:
-
-> Restrict the language so performance can be *proven* before execution.
-
-If the code passes Phoenix’s rules, it is compiled to native machine code via C and `gcc -O3`.
-
----
-
-## Language Guarantees
-
-Phoenix enforces the following at compile time:
-
-1. Variables may not change type
-2. Lists must contain a single element type
-3. No `eval`, `exec`, reflection, or dynamic imports
-4. `for` uses `range(<int literal/const>)` or lists with known length (non-zero step); `while` requires a counter compared to an int literal and a monotonic literal step
-5. Function returns are type-stable
-6. Logical ops (`and`, `or`, `not`) and comparisons (incl. chained) need bool/numeric operands and yield bool
-7. List indexing is bounds-checked (static when possible, runtime otherwise)
-
-If any rule is violated, compilation fails with a precise error message.
+Phoenix caches binaries in `.phoenix_cache/` keyed by source hash — repeat runs are instant.
 
 ---
 
 ## Example
 
-### Valid Phoenix code
+### Phoenix code
 
 ```python
 values = [1, 4, 9, 16]
@@ -105,50 +66,59 @@ printf("%d\n", total);
 
 ---
 
-## Benchmarks
+## Why Phoenix instead of NumPy / Cython / PyPy?
 
-Summing integers in nested loops.
+| Tool | What it does | Limitation |
+|---|---|---|
+| NumPy | Fast array math | Requires vectorizable code, Python overhead for loops |
+| Cython | Compiles annotated Python to C | Requires type annotations, complex build setup |
+| PyPy | JIT-compiled Python | Still Python semantics, unpredictable warmup |
+| **Phoenix** | Statically verified subset → native binary | Restricted language; no classes, no stdlib |
 
-### Python (CPython 3.x)
-
-```
-Time: ~0.52 seconds
-```
-
-### Phoenix → C (gcc -O3)
-
-```
-Time: ~0.01 seconds
-```
-
-Phoenix achieves **50–100× speedups** on numeric workloads by eliminating dynamic overhead entirely.
+Phoenix's advantage: **zero interpreter overhead, provably at compile time.** If the program passes Phoenix's rules, the generated C is as fast as hand-written C.
 
 ---
 
-## Language Rules (v0)
+## How it works
 
-1. Variables may not change type.
-2. Lists must contain one static element type.
-3. No `eval`, `exec`, reflection, or dynamic imports.
-4. `for` must be `range(<int literal/const>)` or a list with known length; `while` must use a counter compared to an int literal with a monotonic literal step.
-5. Function return type must be consistent.
-6. Logical ops (`and`, `or`, `not`) and comparisons (incl. chained) need bool/numeric operands and return bool.
-7. `if` conditions must be boolean; assignments must exist in all branches (elif/nested `if` allowed).
+Phoenix enforces a **zero-ambiguity** execution model:
 
-If any rule is violated, compilation fails with a precise error message.
+> If performance cannot be proven at compile time, the program is rejected.
+
+The pipeline:
+
+1. Parse Python source into AST
+2. Verify zero-ambiguity rules (type stability, loop bounds, no dynamic code)
+3. Generate deterministic C
+4. Compile with `gcc -O3`
+5. Execute native binary
 
 ---
 
-## Supported Constructs (today)
+## Language Rules
 
-- Types: `int`, `float`, `bool`, `string`, fixed-length homogeneous list literals.
-- Control flow: `for` over `range(<int literal/const>)` or known-length lists, bounded `while`, `if`/`elif`/`else` with nesting, logical `and`/`or`/`not`, comparisons (incl. chained), string concatenation via `+` (string + string/int/float), set membership via `in`.
-- Functions: positional parameters with inferred types; returns must be type-stable.
-- Builtins: `print`, `int(...)`, `abs`, `min`, `max`, `pow`, `len`, `sum`, `str`, `round`, `math.sqrt`, `math.sin`, `math.cos`, `math.tan`, `math.floor`, `math.ceil`, `math.log`, `math.exp`, `math.log10`, `math.asin`, `math.acos`, `math.atan`, `math.fabs`, `math.pow` (min/max also accept numeric lists; strings support `.upper()`, `.lower()`, `.strip()`, `.startswith()`, `.endswith()`, `.find()`, `.replace()`).
-- Lists: fixed-length literals and dynamic lists (via `append`/`pop`); slicing on dynamic lists with `list[a:b]` (no step).
-- Dict/Set: dict and set literals with read/write access; dict keys must be `int`/`string`, set elements must be `int`/`string` (`dict[key] = ...`, `del dict[key]`, `set.add(...)`, `set.remove(...)`).
-- Modules: local files via `import module` (same directory), accessed as `module.name`; `import math` allowed for math stdlib.
-- Codegen: C arrays for list literals; `printf` for output; `gcc -O3` compilation.
+Phoenix enforces at compile time:
+
+1. Variables may not change type
+2. Lists must contain a single element type
+3. No `eval`, `exec`, reflection, or dynamic imports
+4. `for` uses `range(n)`, a list, or a dict; `while` requires a counter with a static bound and monotonic step
+5. Function return types are consistent
+6. Logical ops and comparisons require bool/numeric operands
+7. List indexing is bounds-checked (statically when possible, runtime otherwise)
+
+---
+
+## Supported Constructs
+
+- **Types:** `int`, `float`, `bool`, `str`, homogeneous lists, dicts, sets
+- **Control flow:** `for` over `range()`, lists, dynamic lists, and dicts; bounded `while`; `if`/`elif`/`else`
+- **Functions:** positional parameters with inferred types; type-stable returns
+- **Builtins:** `print`, `int`, `abs`, `min`, `max`, `pow`, `len`, `sum`, `str`, `round`, `math.*`
+- **Strings:** `+` concat, `.upper()`, `.lower()`, `.strip()`, `.startswith()`, `.endswith()`, `.find()`, `.replace()`
+- **Lists:** fixed-length literals, dynamic lists (`append`/`pop`), slicing, iteration
+- **Dicts/Sets:** literals, read/write, `del`, `add`/`remove`, key iteration (`for k in d`)
+- **Modules:** local `import module`, `import math`
 
 ---
 
@@ -158,35 +128,21 @@ If any rule is violated, compilation fails with a precise error message.
 | --- | --- | --- |
 | Type stability | ✅ | — |
 | Homogeneous containers | ✅ | — |
-| For-loop bounds | ✅ (range/known-length lists) | — |
+| For-loop bounds | ✅ (range/known-length) | — |
 | While termination | ✅ (strict counter pattern) | — |
-| List indexing | ✅ (literal index + known length) | ✅ (dynamic index or dynamic list) |
-| Dynamic lists (append/pop/slice) | — | ✅ |
+| List indexing | ✅ (literal index + known length) | ✅ (dynamic) |
+| Dynamic lists (append/pop/slice/iterate) | — | ✅ |
 | Dict/Set lookup | — | ✅ (missing key) |
-| Dict/Set mutation | — | ✅ (bounds/lookup) |
+| Dict key iteration (`for k in d`) | ✅ (type match) | ✅ (iteration) |
 | Set membership (`in`/`not in`) | ✅ (type match) | ✅ (lookup) |
-
-Static = guaranteed at compile time. Runtime = guarded with checks in generated C.
-
----
-
-## Architecture Overview
-
-Phoenix pipeline:
-
-1. Parse Python source into AST
-2. Statistically verify zero-ambiguity rules
-3. Generate deterministic C code
-4. Compile with `gcc -O3`
-5. Execute native binary
 
 ---
 
 ## Status
 
-Phoenix is a minimal prototype focused on safety over breadth:
+Phoenix is a working prototype focused on provability over breadth:
 
-- Missing: `from`-imports/aliasing, classes/objects, dictionaries/sets iteration, and broader stdlib coverage.
-- Codegen is deliberately simple: flat arrays, heap-backed dynamic collections, minimal header selection.
+- **Missing:** `from`-imports/aliasing, classes/objects, file I/O, broader stdlib
+- **Next:** `from module import x`, classes, richer error recovery, stronger static bounds proofs
 
-Future work: expand the safe subset (loop analyses, richer math/stdlib), improve diagnostics and error recovery, add stronger static checks (array bounds proofs), support module aliasing/from-imports, and explore a safer memory model for dynamic data while keeping zero-ambiguity guarantees.
+Contributions welcome. See the [PyPI page](https://pypi.org/project/phoenix-lang-cli/) to install the latest release.
